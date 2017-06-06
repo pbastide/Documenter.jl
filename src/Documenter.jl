@@ -488,7 +488,7 @@ function deploydocs(;
                             if !draw_fig
                                 # If figures not drawn, then keep old ones
                                 # (only for latest: always draw figures for stable/tagged)
-                                gitrm_copy(latest_dir*figs_dir, target_dir*figs_dir)
+                                cp(latest_dir*figs_dir, target_dir*figs_dir; remove_destination = true)
                             end
                             gitrm_copy(target_dir, latest_dir)
                             Writers.HTMLWriter.generate_siteinfo_file(latest_dir, "latest")
