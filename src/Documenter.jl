@@ -340,6 +340,8 @@ function deploydocs(;
 
         deps   = Deps.pip("pygments", "mkdocs"),
         make   = () -> run(`mkdocs build`),
+
+        figs_dir = "/assets/figures",
     )
     # Get environment variables.
     documenter_key      = get(ENV, "DOCUMENTER_KEY",       "")
@@ -349,6 +351,10 @@ function deploydocs(;
     travis_tag          = get(ENV, "TRAVIS_TAG",           "")
     travis_osname       = get(ENV, "TRAVIS_OS_NAME",       "")
     travis_julia        = get(ENV, "TRAVIS_JULIA_VERSION", "")
+
+    # Should figures be re-drawn (default to true)
+    draw_fig            = get(ENV, "DRAW_FIG",             "")
+    draw_fig = !(draw_fig == "false")
 
     # Other variables.
     sha = cd(root) do
@@ -479,6 +485,11 @@ function deploydocs(;
 
                         # Copy docs to `latest`, or `stable`, `<release>`, and `<version>` directories.
                         if isempty(travis_tag)
+                            if !draw_fig
+                                # If figures not drawn, then keep old ones
+                                # (only for latest: always draw figures for stable/tagged)
+                                cp(latest_dir*figs_dir, target_dir*figs_dir; remove_destination = true)
+                            end
                             gitrm_copy(target_dir, latest_dir)
                             Writers.HTMLWriter.generate_siteinfo_file(latest_dir, "latest")
                         else
