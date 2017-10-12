@@ -75,12 +75,12 @@ julia> # First definition.
        #
        # Second definition.
        #
-       type T
+       struct T
            x
        end
 
 julia> isdefined(:f), isdefined(:T) # Check for both definitions.
-(true,true)
+(true, true)
 
 julia> import Base
 
@@ -169,7 +169,7 @@ then `@example` blocks will show the SVG image in the output. Assuming the follo
 and method live in the `InlineSVG` module
 
 ```julia
-type SVG
+struct SVG
     code :: String
 end
 Base.show(io, ::MIME"image/svg+xml", svg::SVG) = write(io, svg.code)
@@ -177,8 +177,18 @@ Base.show(io, ::MIME"image/svg+xml", svg::SVG) = write(io, svg.code)
 
 .. then we we can invoke and show them with an `@example` block:
 
-```@example
-using InlineSVG
+```@setup inlinesvg
+module InlineSVG
+export SVG
+mutable struct SVG
+    code :: String
+end
+Base.show(io, ::MIME"image/svg+xml", svg::SVG) = write(io, svg.code)
+end # module
+```
+
+```@example inlinesvg
+using .InlineSVG
 SVG("""
 <svg width="82" height="76">
   <g style="stroke-width: 3">

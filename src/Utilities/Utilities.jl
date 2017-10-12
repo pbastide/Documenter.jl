@@ -4,6 +4,7 @@ Provides a collection of utility functions and types that are used in other subm
 module Utilities
 
 using Base.Meta, Compat
+import Base: isdeprecated, Docs.Binding
 using DocStringExtensions
 
 # Logging output.
@@ -60,15 +61,6 @@ function warn(doc, page, msg, err)
     print_with_color(:red, STDOUT, " !! Warning in $(file):\n\n$(msg)\n\nERROR: $(err)\n\n")
 end
 
-# Nullable regex matches.
-
-wrapnothing(T, ::Void) = Nullable{T}()
-wrapnothing(T, value)  = Nullable(value)
-
-nullmatch(r::Regex, str::AbstractString) = wrapnothing(RegexMatch, match(r, str))
-
-getmatch(n::Nullable{RegexMatch}, i) = get(n)[i]
-
 # Directory paths.
 
 """
@@ -124,14 +116,14 @@ function parseblock(code::AbstractString, doc, page; skip = 0, keywords = true)
     code = string(code, '\n')
     code = last(split(code, '\n', limit = skip + 1))
     # Check whether we have windows-style line endings.
-    local offset = contains(code, "\n\r") ? 2 : 1
-    local endofstr = endof(code)
-    local results = []
-    local cursor = 1
+    offset = contains(code, "\n\r") ? 2 : 1
+    endofstr = endof(code)
+    results = []
+    cursor = 1
     while cursor < endofstr
         # Check for keywords first since they will throw parse errors if we `parse` them.
-        local line = match(r"^(.+)$"m, SubString(code, cursor)).captures[1]
-        local keyword = Symbol(strip(line))
+        line = match(r"^(.+)$"m, SubString(code, cursor)).captures[1]
+        keyword = Symbol(strip(line))
         (ex, ncursor) =
             if keywords && haskey(Docs.keywords, keyword)
                 # adding offset below should be OK, as `\n` and `\r` are single byte
@@ -194,30 +186,17 @@ function submodules(root::Module, seen = Set{Module}())
     return seen
 end
 
-# Compat for `isdeprecated` which does not exist in Julia 0.4.
-if isdefined(Base, :isdeprecated)
-    isdeprecated(m, s) = Base.isdeprecated(m, s)
-else
-    isdeprecated(m, s) = ccall(:jl_is_binding_deprecated, Cint, (Any, Any), m, s) != 0
-end
+
 
 ## objects
 ## =======
 
-import Base.Docs: Binding
 
-if VERSION < v"0.5.0-dev"
-    @eval function Base.call(::Type{Binding}, m::Module, v::Symbol)
-        m = module_name(m) === v ? module_parent(m) : m
-        m = Base.binding_module(m, v)
-        $(Expr(:new, :Binding, :m, :v))
-    end
-end
 
 """
 Represents an object stored in the docsystem by its binding and signature.
 """
-immutable Object
+struct Object
     binding   :: Binding
     signature :: Type
 
@@ -232,7 +211,7 @@ function splitexpr(x::Expr)
     isexpr(x, :.)         ? (x.args[1], x.args[2]) :
     error("Invalid @var syntax `$x`.")
 end
-splitexpr(s::Symbol) = :(current_module()), quot(s)
+splitexpr(s::Symbol) = :(Main), quot(s)
 splitexpr(other)     = error("Invalid @var syntax `$other`.")
 
 """
@@ -274,15 +253,9 @@ Returns an expression that, when evaluated, returns the docstrings associated wi
 function docs end
 
 # Macro representation changed between 0.4 and 0.5.
-if VERSION < v"0.5-"
-    function docs(ex::Union{Symbol, Expr}, str::AbstractString)
-        :(Base.Docs.@doc $ex)
-    end
-else
-    function docs(ex::Union{Symbol, Expr}, str::AbstractString)
-        isexpr(ex, :macrocall, 1 + Compat.macros_have_sourceloc) && !endswith(rstrip(str), "()") && (ex = quot(ex))
-        :(Base.Docs.@doc $ex)
-    end
+function docs(ex::Union{Symbol, Expr}, str::AbstractString)
+    isexpr(ex, :macrocall, 1 + Compat.macros_have_sourceloc) && !endswith(rstrip(str), "()") && (ex = quot(ex))
+    :(Base.Docs.@doc $ex)
 end
 docs(qn::QuoteNode, str::AbstractString) = :(Base.Docs.@doc $(qn.value))
 
@@ -306,9 +279,7 @@ doccat(b::Binding, ::Type)  = "Method"
 
 doccat(::Function) = "Function"
 doccat(::DataType) = "Type"
-if isdefined(Base, :UnionAll)
-    doccat(::UnionAll) = "Type"
-end
+doccat(x::UnionAll) = doccat(Base.unwrap_unionall(x))
 doccat(::Module)   = "Module"
 doccat(::Any)      = "Constant"
 
@@ -320,41 +291,41 @@ Remove docstrings from the markdown object, `doc`, that are not from one of `mod
 function filterdocs(doc::Markdown.MD, modules::Set{Module})
     if isempty(modules)
         # When no modules are specified in `makedocs` then don't filter anything.
-        Nullable(doc)
+        doc
     else
         if haskey(doc.meta, :module)
-            doc.meta[:module] ∈ modules ? Nullable(doc) : Nullable{Markdown.MD}()
+            doc.meta[:module] ∈ modules ? doc : nothing
         else
             if haskey(doc.meta, :results)
                 out = []
                 results = []
                 for (each, result) in zip(doc.content, doc.meta[:results])
                     r = filterdocs(each, modules)
-                    if !isnull(r)
-                        push!(out, get(r))
+                    if r !== nothing
+                        push!(out, r)
                         push!(results, result)
                     end
                 end
                 if isempty(out)
-                    Nullable{Markdown.MD}()
+                    nothing
                 else
                     md = Markdown.MD(out)
                     md.meta[:results] = results
-                    Nullable(md)
+                    md
                 end
             else
                 out = []
                 for each in doc.content
                     r = filterdocs(each, modules)
-                    isnull(r) || push!(out, get(r))
+                    r === nothing || push!(out, r)
                 end
-                isempty(out) ? Nullable{Markdown.MD}() : Nullable(Markdown.MD(out))
+                isempty(out) ? nothing : Markdown.MD(out)
             end
         end
     end
 end
 # Non-markdown docs won't have a `.meta` field so always just accept those.
-filterdocs(other, modules::Set{Module}) = Nullable(other)
+filterdocs(other, modules::Set{Module}) = other
 
 """
 Does the given docstring represent actual documentation or a no docs error message?
@@ -362,13 +333,9 @@ Does the given docstring represent actual documentation or a no docs error messa
 nodocs(x)      = contains(stringmime("text/plain", x), "No documentation found.")
 nodocs(::Void) = false
 
-header_level{N}(::Markdown.Header{N}) = N
+header_level(::Markdown.Header{N}) where {N} = N
 
-if VERSION < v"0.6.0-dev.1254"
-    takebuf_str(b) = takebuf_string(b)
-else
-    takebuf_str(b) = String(take!(b))
-end
+takebuf_str(b) = String(take!(b))
 
 # Finding URLs -- based partially on code from the main Julia repo in `base/methodshow.jl`.
 #
@@ -407,7 +374,7 @@ Check if we're running under cygwin. Useful when we need to translate cygwin pat
 windows paths.
 """
 function in_cygwin()
-    if is_windows()
+    if Compat.Sys.iswindows()
         try
             return success(`cygpath -h`)
         catch
@@ -418,80 +385,73 @@ function in_cygwin()
     end
 end
 
-function url(repo, file)
+function relpath_from_repo_root(file)
+    cd(dirname(file)) do
+        root = readchomp(`git rev-parse --show-toplevel`)
+        if in_cygwin()
+            root = readchomp(`cygpath -m "$root"`)
+        end
+        startswith(file, root) ? relpath(file, root) : nothing
+    end
+end
+
+function repo_commit(file)
+    cd(dirname(file)) do
+        readchomp(`git rev-parse HEAD`)
+    end
+end
+
+function url(repo, file; commit=nothing)
     file = abspath(file)
     remote = getremote(dirname(file))
-    isempty(repo) && (repo = "https://github.com/$remote/tree/{commit}{path}")
+    isempty(repo) && (repo = "https://github.com/$remote/blob/{commit}{path}")
     # Replace any backslashes in links, if building the docs on Windows
     file = replace(file, '\\', '/')
-    commit, root = cd(dirname(file)) do
-        toplevel = readchomp(`git rev-parse --show-toplevel`)
-        if in_cygwin()
-            toplevel = readchomp(`cygpath -m "$toplevel"`)
-        end
-        readchomp(`git rev-parse HEAD`), toplevel
-    end
-    if startswith(file, root)
-        _, path = split(file, root; limit = 2)
-        repo = replace(repo, "{commit}", commit)
-        repo = replace(repo, "{path}", path)
-        Nullable{Compat.String}(repo)
+    path = relpath_from_repo_root(file)
+    if path === nothing
+        nothing
     else
-        Nullable{Compat.String}()
+        repo = replace(repo, "{commit}", commit === nothing ? repo_commit(file) : commit)
+        repo = replace(repo, "{path}", string("/", path))
+        repo
     end
 end
 
 url(remote, repo, doc) = url(remote, repo, doc.data[:module], doc.data[:path], linerange(doc))
 
-# Correct file and line info only available from this version onwards.
-if VERSION >= v"0.5.0-dev+3442"
-    function url(remote, repo, mod, file, linerange)
-        remote = getremote(dirname(file))
-        isabspath(file) && isempty(remote) && isempty(repo) && return Nullable{Compat.String}()
-        # Replace any backslashes in links, if building the docs on Windows
-        file = replace(file, '\\', '/')
-        # Format the line range.
-        line = format_line(linerange)
-        # Macro-generated methods such as those produced by `@deprecate` list their file as
-        # `deprecated.jl` since that is where the macro is defined. Use that to help
-        # determine the correct URL.
-        if inbase(mod) || !isabspath(file)
-            base = "https://github.com/JuliaLang/julia/tree"
-            dest = "base/$file#$line"
-            Nullable{Compat.String}(
-                if isempty(Base.GIT_VERSION_INFO.commit)
-                    "$base/v$VERSION/$dest"
-                else
-                    commit = Base.GIT_VERSION_INFO.commit
-                    "$base/$commit/$dest"
-                end
-            )
+function url(remote, repo, mod, file, linerange)
+    remote = getremote(dirname(file))
+    isabspath(file) && isempty(remote) && isempty(repo) && return nothing
+    # Replace any backslashes in links, if building the docs on Windows
+    file = replace(file, '\\', '/')
+    # Format the line range.
+    line = format_line(linerange)
+    # Macro-generated methods such as those produced by `@deprecate` list their file as
+    # `deprecated.jl` since that is where the macro is defined. Use that to help
+    # determine the correct URL.
+    if inbase(mod) || !isabspath(file)
+        base = "https://github.com/JuliaLang/julia/blob"
+        dest = "base/$file#$line"
+        if isempty(Base.GIT_VERSION_INFO.commit)
+            "$base/v$VERSION/$dest"
         else
-            commit, root = cd(dirname(file)) do
-                toplevel = readchomp(`git rev-parse --show-toplevel`)
-                if in_cygwin()
-                    toplevel = readchomp(`cygpath -m "$toplevel"`)
-                end
-                readchomp(`git rev-parse HEAD`), toplevel
-            end
-            if startswith(file, root)
-                if isempty(repo)
-                    repo = "https://github.com/$remote/tree/{commit}{path}#{line}"
-                end
-
-                _, path = split(file, root; limit = 2)
-                repo = replace(repo, "{commit}", commit)
-                repo = replace(repo, "{path}", path)
-                repo = replace(repo, "{line}", line)
-
-                Nullable{Compat.String}(repo)
-            else
-                Nullable{Compat.String}()
-            end
+            commit = Base.GIT_VERSION_INFO.commit
+            "$base/$commit/$dest"
+        end
+    else
+        path = relpath_from_repo_root(file)
+        if isempty(repo)
+            repo = "https://github.com/$remote/blob/{commit}{path}#{line}"
+        end
+        if path === nothing
+            nothing
+        else
+            repo = replace(repo, "{commit}", repo_commit(file))
+            repo = replace(repo, "{path}", string("/", path))
+            repo = replace(repo, "{line}", line)
+            repo
         end
     end
-else
-    url(remote, repo, mod, file, line) = Nullable{Compat.String}()
 end
 
 function getremote(dir::AbstractString)
@@ -501,13 +461,12 @@ function getremote(dir::AbstractString)
         catch err
             ""
         end
-    match  = Utilities.nullmatch(isdefined(Base, :LibGit2) ?
-        Base.LibGit2.GITHUB_REGEX : Pkg.Git.GITHUB_REGEX, remote)
-    if isnull(match)
+    m = match(Base.LibGit2.GITHUB_REGEX, remote)
+    if m === nothing
         travis = get(ENV, "TRAVIS_REPO_SLUG", "")
         isempty(travis) ? "" : travis
     else
-        getmatch(match, 1)
+        m[1]
     end
 end
 
@@ -542,8 +501,8 @@ function linerange(text, from)
     return lines > 0 ? (from:(from + lines + 1)) : (from:from)
 end
 
-function format_line(range::Range)
-    local top = format_line(first(range))
+function format_line(range::AbstractRange)
+    top = format_line(first(range))
     return length(range) <= 1 ? top : string(top, '-', format_line(last(range)))
 end
 format_line(line::Integer) = string('L', line)
@@ -551,8 +510,6 @@ format_line(line::Integer) = string('L', line)
 newlines(s::AbstractString) = count(c -> c === '\n', s)
 newlines(other) = 0
 
-
-unwrap(f, x::Nullable) = isnull(x) ? nothing : f(get(x))
 
 # Output redirection.
 # -------------------
@@ -573,17 +530,17 @@ where
 """
 function withoutput(f)
     # Save the default output streams.
-    local stdout = STDOUT
-    local stderr = STDERR
+    stdout = STDOUT
+    stderr = STDERR
 
     # Redirect both the `STDOUT` and `STDERR` streams to a single `Pipe` object.
-    local pipe = Pipe()
+    pipe = Pipe()
     Base.link_pipe(pipe; julia_only_read = true, julia_only_write = true)
     redirect_stdout(pipe.in)
     redirect_stderr(pipe.in)
 
     # Bytes written to the `pipe` are captured in `output` and converted to a `String`.
-    local output = UInt8[]
+    output = UInt8[]
 
     # Run the function `f`, capturing all output that it might have generated.
     # Success signals whether the function `f` did or did not throw an exception.
@@ -602,7 +559,7 @@ function withoutput(f)
             append!(output, readavailable(pipe))
             close(pipe)
         end
-    return result, success, backtrace, chomp(Compat.String(output))
+    return result, success, backtrace, chomp(String(output))
 end
 
 

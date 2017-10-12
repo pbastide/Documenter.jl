@@ -1,11 +1,7 @@
 module DOMTests
 
-if VERSION >= v"0.5.0-dev+7720"
-    using Base.Test
-else
-    using BaseTestNext
-    const Test = BaseTestNext
-end
+using Test
+using Compat
 
 import Documenter.Utilities.DOM: DOM, @tags, HTMLDocument
 
@@ -13,8 +9,7 @@ import Documenter.Utilities.DOM: DOM, @tags, HTMLDocument
 
 @testset "DOM" begin
     for tag in (:div, :ul, :li, :p)
-        TAG = getfield(current_module(), tag)
-        @test isdefined(tag)
+        TAG = @eval $tag
         @test isa(TAG, DOM.Tag)
         @test TAG.name === tag
     end
@@ -86,9 +81,9 @@ import Documenter.Utilities.DOM: DOM, @tags, HTMLDocument
             false
         end
     end
-    @test !isdefined(current_module(), :button)
+    @test !isdefined(@__MODULE__, :button)
     locally_defined()
-    @test !isdefined(current_module(), :button)
+    @test !isdefined(@__MODULE__, :button)
 
     # HTMLDocument
     @test string(HTMLDocument(div())) == "<!DOCTYPE html>\n<div></div>\n"

@@ -1,22 +1,17 @@
 module NavNodeTests
 
-if VERSION >= v"0.5.0-dev+7720"
-    using Base.Test
-else
-    using BaseTestNext
-    const Test = BaseTestNext
-end
+using Test
 
 using Compat
 import Documenter: Documents, Builder
 import Documenter.Documents: NavNode
 
-type FakeDocumentInternal
-    pages   :: Dict{Compat.String, Void}
+mutable struct FakeDocumentInternal
+    pages   :: Dict{String, Void}
     navlist :: Vector{NavNode}
     FakeDocumentInternal() = new(Dict(), [])
 end
-type FakeDocument
+mutable struct FakeDocument
     internal :: FakeDocumentInternal
     FakeDocument() = new(FakeDocumentInternal())
 end
@@ -43,7 +38,7 @@ end
 
     @test length(navlist) == 6
     for (i,navnode) in enumerate(navlist)
-        @test get(navnode.page) == "page$i.md"
+        @test navnode.page == "page$i.md"
     end
 
     @test isa(navtree, Vector{NavNode})
@@ -53,8 +48,8 @@ end
     @test navtree[4] === navlist[6]
 
     section = navtree[3]
-    @test get(section.title_override) == "Section"
-    @test isnull(section.page)
+    @test section.title_override == "Section"
+    @test section.page === nothing
     @test length(section.children) == 3
 
     navpath = Documents.navpath(navlist[5])

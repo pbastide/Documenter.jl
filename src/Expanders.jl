@@ -50,13 +50,13 @@ The default node expander "pipeline", which consists of the following expanders:
 - [`REPLBlocks`](@ref)
 
 """
-@compat abstract type ExpanderPipeline <: Selectors.AbstractSelector end
+abstract type ExpanderPipeline <: Selectors.AbstractSelector end
 
 """
 Tracks all `Markdown.Header` nodes found in the parsed markdown files and stores an
 [`Anchors.Anchor`](@ref) object for each one.
 """
-@compat abstract type TrackHeaders <: ExpanderPipeline end
+abstract type TrackHeaders <: ExpanderPipeline end
 
 """
 Parses each code block where the language is `@meta` and evaluates the key/value pairs found
@@ -71,7 +71,7 @@ end
 ```
 ````
 """
-@compat abstract type MetaBlocks <: ExpanderPipeline end
+abstract type MetaBlocks <: ExpanderPipeline end
 
 """
 Parses each code block where the language is `@docs` and evaluates the expressions found
@@ -85,7 +85,7 @@ deploydocs
 ```
 ````
 """
-@compat abstract type DocsBlocks <: ExpanderPipeline end
+abstract type DocsBlocks <: ExpanderPipeline end
 
 """
 Parses each code block where the language is `@autodocs` and replaces it with all the
@@ -98,7 +98,7 @@ Order   = [:function, :type]
 ```
 ````
 """
-@compat abstract type AutoDocsBlocks <: ExpanderPipeline end
+abstract type AutoDocsBlocks <: ExpanderPipeline end
 
 """
 Parses each code block where the language is `@eval` and evaluates it's content. Replaces
@@ -116,9 +116,9 @@ Markdown.parse("![Plot](plot.svg)")
 ```
 ````
 """
-@compat abstract type EvalBlocks <: ExpanderPipeline end
+abstract type EvalBlocks <: ExpanderPipeline end
 
-@compat abstract type RawBlocks <: ExpanderPipeline end
+abstract type RawBlocks <: ExpanderPipeline end
 
 """
 Parses each code block where the language is `@index` and replaces it with an index of all
@@ -131,7 +131,7 @@ Pages = ["foo.md", "bar.md"]
 ```
 ````
 """
-@compat abstract type IndexBlocks <: ExpanderPipeline end
+abstract type IndexBlocks <: ExpanderPipeline end
 
 """
 Parses each code block where the language is `@contents` and replaces it with a nested list
@@ -146,7 +146,7 @@ Depth = 1
 ````
 The default `Depth` value is `2`.
 """
-@compat abstract type ContentsBlocks <: ExpanderPipeline end
+abstract type ContentsBlocks <: ExpanderPipeline end
 
 """
 Parses each code block where the language is `@example` and evaluates the parsed Julia code
@@ -161,18 +161,18 @@ a + b
 ```
 ````
 """
-@compat abstract type ExampleBlocks <: ExpanderPipeline end
+abstract type ExampleBlocks <: ExpanderPipeline end
 
 """
 Similar to the [`ExampleBlocks`](@ref) expander, but inserts a Julia REPL prompt before each
 toplevel expression in the final document.
 """
-@compat abstract type REPLBlocks <: ExpanderPipeline end
+abstract type REPLBlocks <: ExpanderPipeline end
 
 """
 Similar to the [`ExampleBlocks`](@ref) expander, but hides all output in the final document.
 """
-@compat abstract type SetupBlocks <: ExpanderPipeline end
+abstract type SetupBlocks <: ExpanderPipeline end
 
 Selectors.order(::Type{TrackHeaders})   = 1.0
 Selectors.order(::Type{MetaBlocks})     = 2.0
@@ -230,7 +230,7 @@ function Selectors.runner(::Type{MetaBlocks}, x, page, doc)
     for (ex, str) in Utilities.parseblock(x.code, doc, page)
         if Utilities.isassign(ex)
             try
-                meta[ex.args[1]] = eval(current_module(), ex.args[2])
+                meta[ex.args[1]] = eval(Main, ex.args[2])
             catch err
                 push!(doc.internal.errors, :meta_block)
                 Utilities.warn(doc, page, "Failed to evaluate `$(strip(str))` in `@meta` block.", err)
@@ -246,9 +246,9 @@ end
 function Selectors.runner(::Type{DocsBlocks}, x, page, doc)
     failed = false
     nodes  = DocsNode[]
-    curmod = get(page.globals.meta, :CurrentModule, current_module())
+    curmod = get(page.globals.meta, :CurrentModule, Main)
     for (ex, str) in Utilities.parseblock(x.code, doc, page)
-        local binding = try
+        binding = try
             Documenter.DocSystem.binding(curmod, ex)
         catch err
             push!(doc.internal.errors, :docs_block)
@@ -263,9 +263,9 @@ function Selectors.runner(::Type{DocsBlocks}, x, page, doc)
             failed = true
             continue
         end
-        local typesig = eval(curmod, Documenter.DocSystem.signature(ex, str))
+        typesig = eval(curmod, Documenter.DocSystem.signature(ex, str))
 
-        local object = Utilities.Object(binding, typesig)
+        object = Utilities.Object(binding, typesig)
         # We can't include the same object more than once in a document.
         if haskey(doc.internal.objects, object)
             push!(doc.internal.errors, :docs_block)
@@ -275,7 +275,7 @@ function Selectors.runner(::Type{DocsBlocks}, x, page, doc)
         end
 
         # Find the docs matching `binding` and `typesig`. Only search within the provided modules.
-        local docs = Documenter.DocSystem.getdocs(binding, typesig; modules = doc.user.modules)
+        docs = Documenter.DocSystem.getdocs(binding, typesig; modules = doc.user.modules)
 
         # Include only docstrings from user-provided modules if provided.
         if !isempty(doc.user.modules)
@@ -291,13 +291,13 @@ function Selectors.runner(::Type{DocsBlocks}, x, page, doc)
         end
 
         # Concatenate found docstrings into a single `MD` object.
-        local docstr = Base.Markdown.MD(map(Documenter.DocSystem.parsedoc, docs))
+        docstr = Base.Markdown.MD(map(Documenter.DocSystem.parsedoc, docs))
         docstr.meta[:results] = docs
 
         # Generate a unique name to be used in anchors and links for the docstring.
-        local slug = Utilities.slugify(object)
-        local anchor = Anchors.add!(doc.internal.docs, object, slug, page.build)
-        local docsnode = DocsNode(docstr, anchor, object, page)
+        slug = Utilities.slugify(object)
+        anchor = Anchors.add!(doc.internal.docs, object, slug, page.build)
+        docsnode = DocsNode(docstr, anchor, object, page)
 
         # Track the order of insertion of objects per-binding.
         push!(get!(doc.internal.bindings, binding, Utilities.Object[]), object)
@@ -316,7 +316,7 @@ end
 const AUTODOCS_DEFAULT_ORDER = [:module, :constant, :type, :function, :macro]
 
 function Selectors.runner(::Type{AutoDocsBlocks}, x, page, doc)
-    curmod = get(page.globals.meta, :CurrentModule, current_module())
+    curmod = get(page.globals.meta, :CurrentModule, Main)
     fields = Dict{Symbol, Any}()
     for (ex, str) in Utilities.parseblock(x.code, doc, page)
         if Utilities.isassign(ex)
@@ -330,23 +330,23 @@ function Selectors.runner(::Type{AutoDocsBlocks}, x, page, doc)
     end
     if haskey(fields, :Modules)
         # Gather and filter docstrings.
-        local modules = fields[:Modules]
-        local order = get(fields, :Order, AUTODOCS_DEFAULT_ORDER)
-        local pages = get(fields, :Pages, [])
-        local public = get(fields, :Public, true)
-        local private = get(fields, :Private, true)
-        local results = []
+        modules = fields[:Modules]
+        order = get(fields, :Order, AUTODOCS_DEFAULT_ORDER)
+        pages = get(fields, :Pages, [])
+        public = get(fields, :Public, true)
+        private = get(fields, :Private, true)
+        results = []
         for mod in modules
             for (binding, multidoc) in Documenter.DocSystem.getmeta(mod)
                 # Which bindings should be included?
-                local isexported = Base.isexported(mod, binding.var)
-                local included = (isexported && public) || (!isexported && private)
+                isexported = Base.isexported(mod, binding.var)
+                included = (isexported && public) || (!isexported && private)
                 # What category does the binding belong to?
-                local category = Documenter.DocSystem.category(binding)
+                category = Documenter.DocSystem.category(binding)
                 if category in order && included
                     for (typesig, docstr) in multidoc.docs
-                        local path = docstr.data[:path]
-                        local object = Utilities.Object(binding, typesig)
+                        path = docstr.data[:path]
+                        object = Utilities.Object(binding, typesig)
                         if isempty(pages)
                             push!(results, (mod, path, category, object, isexported, docstr))
                         else
@@ -363,10 +363,10 @@ function Selectors.runner(::Type{AutoDocsBlocks}, x, page, doc)
         end
 
         # Sort docstrings.
-        local modulemap = Documents.precedence(modules)
-        local pagesmap = Documents.precedence(pages)
-        local ordermap = Documents.precedence(order)
-        local comparison = function (a, b)
+        modulemap = Documents.precedence(modules)
+        pagesmap = Documents.precedence(pages)
+        ordermap = Documents.precedence(order)
+        comparison = function (a, b)
             local t
             (t = Documents._compare(modulemap, 1, a, b)) == 0 || return t < 0 # module
             a[5] == b[5] || return a[5] > b[5] # exported bindings before unexported ones.
@@ -384,11 +384,11 @@ function Selectors.runner(::Type{AutoDocsBlocks}, x, page, doc)
                 Utilities.warn(page.source, "Duplicate docs found for '$(object.binding)'.")
                 continue
             end
-            local markdown = Markdown.MD(Documenter.DocSystem.parsedoc(docstr))
+            markdown = Markdown.MD(Documenter.DocSystem.parsedoc(docstr))
             markdown.meta[:results] = [docstr]
-            local slug = Utilities.slugify(object)
-            local anchor = Anchors.add!(doc.internal.docs, object, slug, page.build)
-            local docsnode = DocsNode(markdown, anchor, object, page)
+            slug = Utilities.slugify(object)
+            anchor = Anchors.add!(doc.internal.docs, object, slug, page.build)
+            docsnode = DocsNode(markdown, anchor, object, page)
 
             # Track the order of insertion of objects per-binding.
             push!(get!(doc.internal.bindings, object.binding, Utilities.Object[]), object)
@@ -445,10 +445,10 @@ end
 # --------
 
 function Selectors.runner(::Type{ExampleBlocks}, x, page, doc)
-    matched = Utilities.nullmatch(r"^@example[ ]?(.*)$", x.language)
-    isnull(matched) && error("invalid '@example' syntax: $(x.language)")
+    matched = match(r"^@example[ ]?(.*)$", x.language)
+    matched === nothing && error("invalid '@example' syntax: $(x.language)")
     # The sandboxed module -- either a new one or a cached one from this page.
-    name = Utilities.getmatch(matched, 1)
+    name = matched[1]
     sym  = isempty(name) ? gensym("ex-") : Symbol("ex-", name)
     mod  = get!(page.globals.meta, sym, Module(sym))::Module
     # Evaluate the code block. We redirect STDOUT/STDERR to `buffer`.
@@ -474,7 +474,7 @@ function Selectors.runner(::Type{ExampleBlocks}, x, page, doc)
 
     # Special-case support for displaying SVG graphics. TODO: make this more general.
     output = mimewritable(MIME"image/svg+xml"(), result) ?
-        Documents.RawHTML(stringmime(MIME"image/svg+xml"(), result)) :
+        Documents.RawHTML(Base.invokelatest(stringmime, MIME"image/svg+xml"(), result)) :
         Markdown.Code(Documenter.DocChecks.result_to_string(buffer, result))
 
     # Only add content when there's actually something to add.
@@ -488,9 +488,9 @@ end
 # -----
 
 function Selectors.runner(::Type{REPLBlocks}, x, page, doc)
-    matched = Utilities.nullmatch(r"^@repl[ ]?(.*)$", x.language)
-    isnull(matched) && error("invalid '@repl' syntax: $(x.language)")
-    name = Utilities.getmatch(matched, 1)
+    matched = match(r"^@repl[ ]?(.*)$", x.language)
+    matched === nothing && error("invalid '@repl' syntax: $(x.language)")
+    name = matched[1]
     sym  = isempty(name) ? gensym("repl-") : Symbol("repl-", name)
     mod  = get!(page.globals.meta, sym, Module(sym))::Module
     code = split(x.code, '\n'; limit = 2)[end]
@@ -504,8 +504,8 @@ function Selectors.runner(::Type{REPLBlocks}, x, page, doc)
             end
         end
         result = value
-        local output = if success
-            hide = Documenter.DocChecks.ends_with_semicolon(input)
+        output = if success
+            hide = Base.REPL.ends_with_semicolon(input)
             Documenter.DocChecks.result_to_string(buffer, hide ? nothing : value)
         else
             Documenter.DocChecks.error_to_string(buffer, value, [])
@@ -525,10 +525,10 @@ end
 # ------
 
 function Selectors.runner(::Type{SetupBlocks}, x, page, doc)
-    matched = Utilities.nullmatch(r"^@setup[ ](.+)$", x.language)
-    isnull(matched) && error("invalid '@setup <name>' syntax: $(x.language)")
+    matched = match(r"^@setup[ ](.+)$", x.language)
+    matched === nothing && error("invalid '@setup <name>' syntax: $(x.language)")
     # The sandboxed module -- either a new one or a cached one from this page.
-    name = Utilities.getmatch(matched, 1)
+    name = matched[1]
     sym  = isempty(name) ? gensym("ex-") : Symbol("ex-", name)
     mod  = get!(page.globals.meta, sym, Module(sym))::Module
 
@@ -536,7 +536,7 @@ function Selectors.runner(::Type{SetupBlocks}, x, page, doc)
     page.mapping[x] =
     try
         cd(dirname(page.build)) do
-            eval(mod, :(include_string($(x.code))))
+            include_string(mod, x.code)
         end
         Markdown.MD([])
     catch err
@@ -552,9 +552,9 @@ end
 # ----
 
 function Selectors.runner(::Type{RawBlocks}, x, page, doc)
-    local matched = Utilities.nullmatch(r"@raw[ ](.+)$", x.language)
-    isnull(matched) && error("invalid '@raw <name>' syntax: $(x.language)")
-    page.mapping[x] = Documents.RawNode(Symbol(Utilities.getmatch(matched, 1)), x.code)
+    m = match(r"@raw[ ](.+)$", x.language)
+    m === nothing && error("invalid '@raw <name>' syntax: $(x.language)")
+    page.mapping[x] = Documents.RawNode(Symbol(m[1]), x.code)
 end
 
 # Utilities.

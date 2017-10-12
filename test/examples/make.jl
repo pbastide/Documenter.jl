@@ -1,13 +1,15 @@
+using Compat
+
 # Defines the modules referred to in the example docs (under src/) and then builds them.
 # It can be called separately to build the examples/, or as part of the test suite.
 #
 # It defines a set of variables (`examples_*`) that can be used in the tests.
 # The `examples_root` should be used to check whether this file has already been included
 # or not and should be kept unique.
-isdefined(:examples_root) && error("examples_root is already defined\n$(@__FILE__) included multiple times?")
+isdefined(@__MODULE__, :examples_root) && error("examples_root is already defined\n$(@__FILE__) included multiple times?")
 
 # The `Mod` and `AutoDocs` modules are assumed to exists in the Main module.
-current_module() === Main || error("$(@__FILE__) must be included into Main.")
+(@__MODULE__) === Main || error("$(@__FILE__) must be included into Main.")
 
 # Modules `Mod` and `AutoDocs`
 module Mod
@@ -23,7 +25,7 @@ module Mod
 
     [`func(x)`](@ref)
     """
-    type T end
+    mutable struct T end
 end
 
 "`AutoDocs` module."
@@ -43,7 +45,7 @@ module AutoDocs
     const K = 1
 
     "Type `T`."
-    type T end
+    mutable struct T end
 
     "Macro `@m`."
     macro m() end
@@ -57,7 +59,7 @@ module AutoDocs
         const K = 1
 
         "Type `B.T`."
-        type T end
+        mutable struct T end
 
         "Macro `B.@m`."
         macro m() end
@@ -72,39 +74,12 @@ module AutoDocs
         const K = 1
 
         "Type `B.T`."
-        type T end
+        mutable struct T end
 
         "Macro `B.@m`."
         macro m() end
     end
 end
-
-module Issue398
-
-immutable TestType{T} end
-
-function _show end
-Base.show(io::IO, t::TestType) = _show(io, t)
-
-macro define_show_and_make_object(x, y)
-    z = Expr(:quote, x)
-    esc(quote
-        $(Issue398)._show(io::IO, t::$(Issue398).TestType{$z}) = print(io, $y)
-        const $x = $(Issue398).TestType{$z}()
-    end)
-end
-
-export @define_show_and_make_object
-
-end # module
-
-module InlineSVG
-export SVG
-type SVG
-    code :: String
-end
-Base.show(io, ::MIME"image/svg+xml", svg::SVG) = write(io, svg.code)
-end # module
 
 # Build example docs
 using Documenter
@@ -146,6 +121,8 @@ examples_html_doc = makedocs(
 
     linkcheck = true,
     linkcheck_ignore = [r"(x|y).md", "z.md", r":func:.*"],
+
+    html_edit_branch = nothing,
 )
 
 info("Building mock package docs: HTMLWriter with pretty URLs")
@@ -155,7 +132,10 @@ examples_html_doc = makedocs(
     build = "builds/html-pretty-urls",
     format   = :html,
     html_prettyurls = true,
-    assets = ["assets/custom.css"],
+    assets = [
+        "assets/favicon.ico",
+        "assets/custom.css"
+    ],
     sitename = "Documenter example",
     pages    = Any[
         "Home" => "index.md",

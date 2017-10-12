@@ -1,11 +1,6 @@
 module LaTeXFormatTests
 
-if VERSION >= v"0.5.0-dev+7720"
-    using Base.Test
-else
-    using BaseTestNext
-    const Test = BaseTestNext
-end
+using Test
 
 using Documenter
 
@@ -20,7 +15,7 @@ doc = makedocs(
     format = :latex,
     sitename = "Documenter.jl",
     authors = "Michael Hatherly, Morten Piibeleht, and contributors.",
-    pages = Any[ # Compat: `Any` for 0.4 compat
+    pages = [
         "Home" => "index.md",
         "Manual" => Any[
             "Guide" => "man/guide.md",

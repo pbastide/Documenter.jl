@@ -5,6 +5,7 @@ docsystem in both `0.4` and `0.5`.
 module DocSystem
 
 using Compat, DocStringExtensions
+import Base.Docs: MultiDoc, parsedoc, formatdoc, DocStr
 
 ## Bindings ##
 
@@ -31,21 +32,8 @@ binding(any::Any) = throw(ArgumentError("cannot convert `$any` to a `Binding`.")
 binding(b::Docs.Binding) = binding(b.mod, b.var)
 binding(d::DataType)     = binding(d.name.module, d.name.name)
 binding(m::Module)       = binding(m, module_name(m))
-binding(s::Symbol)       = binding(current_module(), s)
-
-#
-# In `0.4` some functions aren't generic, hence the `isgeneric` check here.
-# We punt on using `current_module` in when not generic, which may cause
-# trouble when calling this function with a qualified name.
-#
-if VERSION < v"0.5.0-dev"
-    binding(f::Function) =
-        isgeneric(f) ?
-            binding(f.env.module, f.env.name) :
-            binding(current_module(), f.env)
-else
-    binding(f::Function) = binding(typeof(f).name.module, typeof(f).name.mt.name)
-end
+binding(s::Symbol)       = binding(Main, s)
+binding(f::Function)     = binding(typeof(f).name.module, typeof(f).name.mt.name)
 
 #
 # We need a lookup table for `IntrinsicFunction`s since they do not track their
@@ -90,26 +78,9 @@ function signature(x, str::AbstractString)
     ts = Base.Docs.signature(x)
     (Meta.isexpr(x, :macrocall, 1 + Compat.macros_have_sourceloc) && !endswith(strip(str), "()")) ? :(Union{}) : ts
 end
-if VERSION < v"0.5.0-dev"
-    Base.Docs.signature(::Any) = :(Union{})
-end
 
 ## Docstring containers. ##
 
-#
-# `MultiDoc` objects contain a collection of related `DocStr` objects.
-#
-# Here "related" means that they share the same `Binding` and defining module.
-#
-if isdefined(Base.Docs, :MultiDoc)
-    import Base.Docs: MultiDoc
-else
-    immutable MultiDoc
-        order :: Vector{Type}
-        docs  :: ObjectIdDict
-    end
-    MultiDoc() = MultiDoc([], ObjectIdDict())
-end
 
 """
 Construct a `MultiDoc` object from the provided argument.
@@ -131,56 +102,7 @@ function multidoc(markdown::Markdown.MD)
     md
 end
 
-if isdefined(Base.Docs, :FuncDoc)
-    function multidoc(funcdoc::Docs.FuncDoc)
-        md = MultiDoc()
-        append!(md.order, funcdoc.order)
-        for (k, v) in funcdoc.meta
-            md.docs[k] = docstr(v; source = funcdoc.source[k])
-        end
-        md
-    end
-end
 
-if isdefined(Base.Docs, :TypeDoc)
-    function multidoc(typedoc::Docs.TypeDoc)
-        md = MultiDoc()
-        append!(md.order, typedoc.order)
-        if typedoc.main !== nothing
-            unshift!(md.order, Union{})
-            md.docs[Union{}] = docstr(typedoc.main; fields = typedoc.fields)
-        end
-        for (k, v) in typedoc.meta
-            md.docs[k] = docstr(v)
-        end
-        md
-    end
-end
-
-#
-# `DocStr` objects store a raw documentation string and it's parsed form,
-# which is typically a `Markdown.MD` object.
-#
-# Additionally arbitrary metadata in the form of `Symbol => Any` pairs may be
-# stored in the `.data` `Dict`.
-#
-# The following data are stored in `.data`:
-#
-# - `:module`     Valid in both `0.4` and `0.5`.
-# - `:path`       Invalid for `Base` docstrings in `0.4`.
-# - `:linenumber` Invalid for docstrings in `0.4`.
-# - `:binding`    Non-standard: Added by `DocSystem.getdocs`.
-# - `:typesig`    Non-standard: Added by `DocSystem.getdocs`.
-#
-if isdefined(Base.Docs, :DocStr)
-    import Base.Docs: DocStr
-else
-    type DocStr
-        text   :: SimpleVector
-        object :: Nullable
-        data   :: Dict{Symbol, Any}
-    end
-end
 
 """
 $(SIGNATURES)
@@ -196,7 +118,7 @@ function docstr(md::Markdown.MD; kws...)
         :module => md.meta[:module],
         :linenumber => 0,
     )
-    doc = DocStr(Core.svec(), Nullable(md), data)
+    doc = DocStr(Core.svec(), md, data)
     for (key, value) in kws
         doc.data[key] = value
     end
@@ -207,38 +129,7 @@ docstr(other) = other
 
 ## Formatting `DocStr`s. ##
 
-#
-# The `parsedoc` function returns the parsed object stored in a docstring.
-#
-# In `0.4` `parsedoc` will just return `get(d.object)` immediately since
-# `d.object` is never null, and so `formatdoc` will never be called. We
-# define it anyway for the sake of consistency with `0.5`.
-#
-if isdefined(Base.Docs, :parsedoc)
-    import Base.Docs: parsedoc, formatdoc
-else
-    # `DocStr` should be defined by this point, whether it is from this
-    # module or from `Base.Docs` and so doesn't need to be qualified.
 
-    function formatdoc(d::DocStr)
-        buffer = IOBuffer()
-        for part in d.text
-            formatdoc(buffer, d, part)
-        end
-        Markdown.parse(seekstart(buffer))
-    end
-    @noinline formatdoc(buffer, d, part) = print(buffer, part)
-
-    function parsedoc(d::DocStr)
-        if isnull(d.object)
-            md = formatdoc(d)
-            md.meta[:module] = d.data[:module]
-            md.meta[:path]   = d.data[:path]
-            d.object = Nullable(md)
-        end
-        get(d.object)
-    end
-end
 
 
 ## Converting docstring caches. ##
@@ -349,22 +240,10 @@ end
 # Helper methods used by the `getdocs` function above.
 #
 
-if isdefined(Base.Docs, :META′) # The ′ character here is `\prime` not `ctranspose`.
-    getmeta(m::Module) = isdefined(m, Docs.META′) ? convertmeta(Docs.meta(m)) : ObjectIdDict()
-else
-    getmeta(m::Module) = Docs.meta(m)
-end
+getmeta(m::Module) = Docs.meta(m)
 
-if isdefined(Base.Docs, :aliasof)
-    import Base.Docs: aliasof, resolve, defined
-else
-    defined(b::Docs.Binding) = isdefined(b.mod, b.var)
-    resolve(b::Docs.Binding) = getfield(b.mod, b.var)
+import Base.Docs: aliasof, resolve, defined
 
-    aliasof(t::Union{DataType, Core.IntrinsicFunction, Function, Module}, ::Any) = binding(t)
-    aliasof(b::Docs.Binding) = defined(b) ? (a = aliasof(resolve(b), b); defined(a) ? a : b) : b
-    aliasof(other, b) = b
-end
 
 aliasof(s::Symbol, b) = binding(s)
 
@@ -383,6 +262,7 @@ function category(b::Docs.Binding)
 end
 category(::Function) = :function
 category(::DataType) = :type
+category(x::UnionAll) = category(Base.unwrap_unionall(x))
 category(::Module) = :module
 category(::Any) = :constant
 

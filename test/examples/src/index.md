@@ -122,7 +122,7 @@ julia> a + 1
 # Sanitise module names
 
 ```jldoctest
-julia> type T end
+julia> struct T end
 
 julia> t = T()
 T()
@@ -131,7 +131,7 @@ julia> fullname(current_module())
 ()
 
 julia> fullname(Base.Pkg)
-(:Base,:Pkg)
+(:Base, :Pkg)
 
 julia> current_module()
 Main
@@ -141,13 +141,36 @@ Main
 
 ```@meta
 DocTestSetup = quote
-    using Issue398
+    module Issue398
+
+    struct TestType{T} end
+
+    function _show end
+    Base.show(io::IO, t::TestType) = _show(io, t)
+
+    macro define_show_and_make_object(x, y)
+        z = Expr(:quote, x)
+        esc(quote
+            $(Issue398)._show(io::IO, t::$(Issue398).TestType{$z}) = print(io, $y)
+            const $x = $(Issue398).TestType{$z}()
+        end)
+    end
+
+    export @define_show_and_make_object
+
+    end # module
+
+    using .Issue398
 end
 ```
 
 ```jldoctest
 julia> @define_show_and_make_object q "abcd"
 abcd
+```
+
+```@meta
+DocTestSetup = nothing
 ```
 
 # Issue418
@@ -194,6 +217,49 @@ julia> a = 1
 
 julia> ans
 1
+```
+
+# Filtering of `Main.`
+
+```jldoctest
+julia> struct Point end;
+
+julia> println(Point)
+Point
+
+julia> sqrt(100)
+10.0
+
+julia> sqrt = 4
+ERROR: cannot assign variable Base.sqrt from module Main
+```
+
+```jldoctest
+julia> g(x::Float64, y) = 2x + y
+g (generic function with 1 method)
+
+julia> g(x, y::Float64) = x + 2y
+g (generic function with 2 methods)
+
+julia> g(2.0, 3)
+7.0
+
+julia> g(2, 3.0)
+8.0
+
+julia> g(2.0, 3.0)
+ERROR: MethodError: g(::Float64, ::Float64) is ambiguous. Candidates:
+  g(x, y::Float64) in Main at none:1
+  g(x::Float64, y) in Main at none:1
+Possible fix, define
+  g(::Float64, ::Float64)
+```
+
+# Anonymous function declaration
+
+```jldoc
+julia> x->x # ignore error on 0.7
+#1 (generic function with 1 method)
 ```
 
 # Bad links (Windows)

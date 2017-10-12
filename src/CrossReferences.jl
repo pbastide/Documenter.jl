@@ -93,7 +93,7 @@ function namedxref(link::Markdown.Link, slug, meta, page, doc)
     if Anchors.exists(headers, slug)
         if Anchors.isunique(headers, slug)
             # Replace the `@ref` url with a path to the referenced header.
-            anchor   = get(Anchors.anchor(headers, slug))
+            anchor   = Anchors.anchor(headers, slug)
             path     = relpath(anchor.file, dirname(page.build))
             link.url = string(path, '#', slug, '-', anchor.nth)
         else
@@ -113,7 +113,7 @@ function docsxref(link::Markdown.Link, code, meta, page, doc)
     # Add the link to list of local uncheck links.
     doc.internal.locallinks[link] = link.url
     # Parse the link text and find current module.
-    local keyword = Symbol(strip(code))
+    keyword = Symbol(strip(code))
     local ex
     if haskey(Docs.keywords, keyword)
         ex = QuoteNode(keyword)
@@ -127,7 +127,7 @@ function docsxref(link::Markdown.Link, code, meta, page, doc)
             return
         end
     end
-    local mod = get(meta, :CurrentModule, current_module())
+    mod = get(meta, :CurrentModule, Main)
 
     # Find binding and type signature associated with the link.
     local binding
@@ -149,9 +149,8 @@ function docsxref(link::Markdown.Link, code, meta, page, doc)
     end
 
     # Try to find a valid object that we can cross-reference.
-    local nullobject = find_object(doc, binding, typesig)
-    if !isnull(nullobject)
-        object = get(nullobject)
+    object = find_object(doc, binding, typesig)
+    if object !== nothing
         # Replace the `@ref` url with a path to the referenced docs.
         docsnode = doc.internal.objects[object]
         path     = relpath(docsnode.page.build, dirname(page.build))
@@ -171,26 +170,26 @@ heuristic isn't too picky about what matches and will only fail when no `Binding
 `binding` have been included.
 """
 function find_object(doc::Documents.Document, binding, typesig)
-    local object = Utilities.Object(binding, typesig)
+    object = Utilities.Object(binding, typesig)
     if haskey(doc.internal.objects, object)
         # Exact object matching the requested one.
-        return Nullable(object)
+        return object
     else
-        local objects = get(doc.internal.bindings, binding, Utilities.Object[])
+        objects = get(doc.internal.bindings, binding, Utilities.Object[])
         if isempty(objects)
             # No bindings match the requested object == FAILED.
-            return Nullable{Utilities.Object}()
+            return nothing
         elseif length(objects) == 1
             # Only one possible choice. Use it even if the signature doesn't match.
-            return Nullable(objects[1])
+            return objects[1]
         else
-            local candidate = find_object(binding, typesig)
+            candidate = find_object(binding, typesig)
             if candidate in objects
                 # We've found an actual match out of the possible choices! Use it.
-                return Nullable(candidate)
+                return candidate
             else
                 # No match in the possible choices. Use the one that was first included.
-                return Nullable(objects[1])
+                return objects[1]
             end
         end
     end
@@ -205,7 +204,7 @@ function find_object(binding, typesig)
 end
 function find_object(λ::Union{Function, DataType}, binding, typesig)
     if _method_exists(λ, typesig)
-        local signature = getsig(λ, typesig)
+        signature = getsig(λ, typesig)
         return Utilities.Object(binding, signature)
     else
         return Utilities.Object(binding, typesig)
@@ -216,13 +215,7 @@ find_object(other, binding, typesig) = Utilities.Object(binding, typesig)
 
 _method_exists(f, t) = method_exists(f, t)
 
-if VERSION < v"0.5.0-dev"
-    _method_exists(d::DataType, t) = false
-    getsig(f::Function, typesig) = which(f, typesig).sig
-    getsig(d::DataType, typesig) = Base.tuple_type_tail(which(d, typesig).sig)
-else
-    getsig(λ::Union{Function, DataType}, typesig) = Base.tuple_type_tail(which(λ, typesig).sig)
-end
+getsig(λ::Union{Function, DataType}, typesig) = Base.tuple_type_tail(which(λ, typesig).sig)
 
 
 # Issues/PRs cross referencing.

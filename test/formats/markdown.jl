@@ -1,11 +1,6 @@
 module MarkdownFormatTests
 
-if VERSION >= v"0.5.0-dev+7720"
-    using Base.Test
-else
-    using BaseTestNext
-    const Test = BaseTestNext
-end
+using Test
 
 using Documenter
 
@@ -24,7 +19,6 @@ doc = makedocs(
 
     let build_dir  = joinpath(Documenter_root, "build"),
         source_dir = joinpath(Documenter_root, "src")
-
         @test isdir(build_dir)
         @test isdir(joinpath(build_dir, "assets"))
         @test isdir(joinpath(build_dir, "lib"))
@@ -32,7 +26,7 @@ doc = makedocs(
 
         @test isfile(joinpath(build_dir, "index.md"))
         @test isfile(joinpath(build_dir, "assets", "mathjaxhelper.js"))
-        @test isfile(joinpath(build_dir, "assets", "Documenter.css"))
+        @test isfile(joinpath(build_dir, "assets", "documenter.css"))
     end
 
     @test doc.user.root   == Documenter_root

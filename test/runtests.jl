@@ -1,3 +1,14 @@
+if VERSION < v"0.7.0-DEV.2004"
+    const Test = Base.Test
+end
+using Test
+
+if !isdefined(Base, Symbol("@isdefined"))
+    macro isdefined(x)
+        :(isdefined($(esc(QuoteNode(x)))))
+    end
+end
+
 # Build the real docs first.
 include("../docs/make.jl")
 
@@ -8,13 +19,6 @@ include("examples/make.jl")
 include("missingdocs/make.jl")
 
 # Primary @testset
-
-if VERSION >= v"0.5.0-dev+7720"
-    using Base.Test
-else
-    using BaseTestNext
-    const Test = BaseTestNext
-end
 
 # Error reporting.
 println("="^50)

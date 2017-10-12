@@ -18,35 +18,23 @@ module Documenter
 
 using Compat, DocStringExtensions
 
-#
 # Submodules
-#
-# All submodules of this package are declared in the following loop.
-#
-# They can either be a single file in the "modules" folder or a subfolder of
-# "modules" containing a file with the same name. Large submodules should be
-# split into several files in a subfolder.
-#
-for mod in [
-    "Utilities",
-    "DocSystem",
-    "Selectors",
-    "Formats",
-    "Anchors",
-    "Documents",
-    "Builder",
-    "Expanders",
-    "Walkers",
-    "CrossReferences",
-    "DocChecks",
-    "Writers",
-    "Deps",
-    "Generator",
-]
-    dir = dirname(@__FILE__)
-    file = joinpath(dir, mod * ".jl")
-    isfile(file) ? include(file) : include(joinpath(dir, mod, mod * ".jl"))
-end
+# ----------
+
+include("Utilities/Utilities.jl")
+include("DocSystem.jl")
+include("Selectors.jl")
+include("Formats.jl")
+include("Anchors.jl")
+include("Documents.jl")
+include("Builder.jl")
+include("Expanders.jl")
+include("Walkers.jl")
+include("CrossReferences.jl")
+include("DocChecks.jl")
+include("Writers/Writers.jl")
+include("Deps.jl")
+include("Generator.jl")
 
 
 # User Interface.
@@ -139,7 +127,7 @@ a different host, you can use this option to tell Documenter how URLs should be
 generated. The following placeholders will be replaced with the respective
 value of the generated link:
 
-  - `{commit}` Git commit id
+  - `{commit}` Git branch or tag name, or commit hash
   - `{path}` Path to the file in the repository
   - `{line}` Line (or range of lines) in the source file
 
@@ -447,7 +435,7 @@ function deploydocs(;
                 target_dir = abspath(target)
 
                 # The upstream URL to which we push new content and the ssh decryption commands.
-                write(keyfile, Compat.String(base64decode(documenter_key)))
+                write(keyfile, String(base64decode(documenter_key)))
                 chmod(keyfile, 0o600)
                 upstream = "git@$(replace(repo, "github.com/", "github.com:"))"
 
@@ -500,8 +488,8 @@ function deploydocs(;
                             # Build a `release-*.*` folder as well when the travis tag is
                             # valid, which it *should* always be anyway.
                             if ismatch(Base.VERSION_REGEX, travis_tag)
-                                local version = VersionNumber(travis_tag)
-                                local release = "release-$(version.major).$(version.minor)"
+                                version = VersionNumber(travis_tag)
+                                release = "release-$(version.major).$(version.minor)"
                                 gitrm_copy(target_dir, joinpath(dirname, release))
                                 Writers.HTMLWriter.generate_siteinfo_file(joinpath(dirname, release), release)
                             end
@@ -548,8 +536,8 @@ function gitrm_copy(src, dst)
 end
 
 function withfile(func, file::AbstractString, contents::AbstractString)
-    local hasfile = isfile(file)
-    local original = hasfile ? readstring(file) : ""
+    hasfile = isfile(file)
+    original = hasfile ? read(file, String) : ""
     open(file, "w") do stream
         print(stream, contents)
         flush(stream) # Make sure file is written before continuing.
@@ -587,9 +575,7 @@ using Compat, DocStringExtensions
 
 export genkeys
 
-
-const GITHUB_REGEX = isdefined(Base, :LibGit2) ?
-    Base.LibGit2.GITHUB_REGEX : Base.Pkg.Git.GITHUB_REGEX
+import Base.LibGit2.GITHUB_REGEX
 
 
 """
@@ -631,7 +617,7 @@ function genkeys(package; remote="origin")
     directory = "docs"
     filename  = ".documenter"
 
-    local path = isdir(package) ? package : Pkg.dir(package, directory)
+    path = isdir(package) ? package : Pkg.dir(package, directory)
     isdir(path) || error("`$path` not found. Provide a package name or directory.")
 
     cd(path) do
@@ -656,7 +642,7 @@ function genkeys(package; remote="origin")
         # Prompt user to add public key to github then remove the public key.
         let url = "https://github.com/$user/$repo/settings/keys"
             info("add the public key below to $url with read/write access:")
-            println("\n", readstring("$filename.pub"))
+            println("\n", read("$filename.pub", String))
             rm("$filename.pub")
         end
 
@@ -665,7 +651,7 @@ function genkeys(package; remote="origin")
         # copy/paste it over to travis without having to worry about whitespace.
         let url = "https://travis-ci.org/$user/$repo/settings"
             info("add a secure environment variable named 'DOCUMENTER_KEY' to $url with value:")
-            println("\n", base64encode(readstring(".documenter")), "\n")
+            println("\n", base64encode(read(".documenter", String)), "\n")
             rm(filename)
         end
     end

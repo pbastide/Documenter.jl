@@ -5,12 +5,21 @@ A module for rendering `Document` objects to HTML.
 
 [`HTMLWriter`](@ref) uses the following additional keyword arguments that can be passed to
 [`Documenter.makedocs`](@ref): `assets`, `sitename`, `analytics`, `authors`, `pages`,
-`version`, `html_prettyurls`.
+`version`, `html_prettyurls`, `html_disable_git`.
 
 **`version`** specifies the version string of the current version which will be the
 selected option in the version selector. If this is left empty (default) the version
 selector will be hidden. The special value `git-commit` sets the value in the output to
 `git:{commit}`, where `{commit}` is the first few characters of the current commit hash.
+
+**`html_disable_git`** can be used to disable calls to `git` when the document is not
+in a Git-controlled repository. Without setting this to `true`, Documenter will throw
+an error and exit if any of the Git commands fail. The calls to Git are mainly used to
+gather information about the current commit hash and file paths, necessary for constructing
+the links to the remote repository.
+
+**`html_edit_branch`** specifies which branch, tag or commit the "Edit on GitHub" links
+point to. It defaults to `master`. If it set to `nothing`, the current commit will be used.
 
 # Page outline
 
@@ -40,15 +49,17 @@ the subdirectories of `assets/` are not linked).
 For the **logo**, Documenter checks for the existence of `assets/logo.png`.
 If that's present, it gets displayed in the navigation bar.
 
-Additional JS and CSS assets can be included in the generated pages using the `assets`
-keyword for `makedocs`. `assets` must be a `Vector{String}` and will include each listed
-asset in the `<head>` of every page in the order in which they are listed. The type of
-the asset (i.e. whether it is going to be included with a `<script>` or a `<link>` tag)
-is determined by the file's extension -- either `.js` or `.css`.
+Additional JS, ICO, and CSS assets can be included in the generated pages using the
+`assets` keyword for `makedocs`. `assets` must be a `Vector{String}` and will include
+each listed asset in the `<head>` of every page in the order in which they are listed.
+The type of the asset (i.e. whether it is going to be included with a `<script>` or a
+`<link>` tag) is determined by the file's extension -- either `.js`, `.ico`, or `.css`.
+Adding an ICO asset is primarilly useful for setting a custom `favicon`.
 """
 module HTMLWriter
 
 using Compat
+import Base.Markdown: isordered
 
 import ...Documenter:
     Anchors,
@@ -73,16 +84,16 @@ const highlightjs_css = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.1
 [`HTMLWriter`](@ref)-specific globals that are passed to [`domify`](@ref) and
 other recursive functions.
 """
-type HTMLContext
+mutable struct HTMLContext
     doc :: Documents.Document
-    logo :: Compat.String
-    scripts :: Vector{Compat.String}
-    documenter_js :: Compat.String
-    search_js :: Compat.String
+    logo :: String
+    scripts :: Vector{String}
+    documenter_js :: String
+    search_js :: String
     search_index :: IOBuffer
-    search_index_js :: Compat.String
+    search_index_js :: String
     search_navnode :: Documents.NavNode
-    local_assets :: Vector{Compat.String}
+    local_assets :: Vector{String}
 end
 HTMLContext(doc) = HTMLContext(doc, "", [], "", "", IOBuffer(), "", Documents.NavNode("search", "Search", nothing), [])
 
@@ -90,7 +101,7 @@ HTMLContext(doc) = HTMLContext(doc, "", [], "", "", IOBuffer(), "", Documents.Na
 Returns a page (as a [`Documents.Page`](@ref) object) using the [`HTMLContext`](@ref).
 """
 getpage(ctx, path) = ctx.doc.internal.pages[path]
-getpage(ctx, navnode::Documents.NavNode) = getpage(ctx, get(navnode.page))
+getpage(ctx, navnode::Documents.NavNode) = getpage(ctx, navnode.page)
 
 
 function render(doc::Documents.Document)
@@ -219,11 +230,12 @@ end
 
 function asset_links(src::AbstractString, assets::Vector)
     @tags link script
-    local links = DOM.Node[]
+    links = DOM.Node[]
     for each in assets
-        local ext = splitext(each)[end]
-        local url = relhref(src, each)
-        local node =
+        ext = splitext(each)[end]
+        url = relhref(src, each)
+        node =
+            ext == ".ico" ? link[:href  => url, :rel => "icon", :type => "image/x-icon"] :
             ext == ".css" ? link[:href  => url, :rel => "stylesheet", :type => "text/css"] :
             ext == ".js"  ? script[:src => url] : continue # Skip non-js/css files.
         push!(links, node)
@@ -313,7 +325,7 @@ function render_navmenu(ctx, navnode)
         push!(navmenu.nodes, version_selector)
     end
     push!(navmenu.nodes,
-        form[".search", :action => navhref(ctx, ctx.search_navnode, navnode)](
+        form[".search#search-form", :action => navhref(ctx, ctx.search_navnode, navnode)](
             input[
                 "#search-query",
                 :name => "q",
@@ -352,7 +364,7 @@ function navitem(ctx, current, nn::Documents.NavNode)
 
     # construct this item
     title = mdconvert(pagetitle(ctx, nn); droplinks=true)
-    link = if isnull(nn.page)
+    link = if nn.page === nothing
         span[".toctext"](title)
     else
         a[".toctext", :href => navhref(ctx, nn, current)](title)
@@ -360,8 +372,8 @@ function navitem(ctx, current, nn::Documents.NavNode)
     item = (nn === current) ? li[".current"](link) : li(link)
 
     # add the subsections (2nd level headings) from the page
-    if (nn === current) && !isnull(current.page)
-        subs = collect_subsections(ctx.doc.internal.pages[get(current.page)])
+    if (nn === current) && current.page !== nothing
+        subs = collect_subsections(ctx.doc.internal.pages[current.page])
         internal_links = map(subs) do s
             istoplevel, anchor, text = s
             _li = istoplevel ? li[".toplevel"] : li[]
@@ -385,7 +397,7 @@ function render_article(ctx, navnode)
 
     header_links = map(Documents.navpath(navnode)) do nn
         title = mdconvert(pagetitle(ctx, nn); droplinks=true)
-        isnull(nn.page) ? li(title) : li(a[:href => navhref(ctx, nn, navnode)](title))
+        nn.page === nothing ? li(title) : li(a[:href => navhref(ctx, nn, navnode)](title))
     end
 
     topnav = nav(ul(header_links))
@@ -400,24 +412,27 @@ function render_article(ctx, navnode)
         host = "BitBucket"
         logo = "\uf171"
     end
-    Utilities.unwrap(Utilities.url(ctx.doc.user.repo, getpage(ctx, navnode).source)) do url
-        push!(topnav.nodes, a[".edit-page", :href => url](span[".fa"](logo), " Edit on $host"))
+    if !ctx.doc.user.html_disable_git
+        url = Utilities.url(ctx.doc.user.repo, getpage(ctx, navnode).source, commit=ctx.doc.user.html_edit_branch)
+        if url !== nothing
+            push!(topnav.nodes, a[".edit-page", :href => url](span[".fa"](logo), " Edit on $host"))
+        end
     end
     art_header = header(topnav, hr(), render_topbar(ctx, navnode))
 
     # build the footer with nav links
     art_footer = footer(hr())
-    Utilities.unwrap(navnode.prev) do nn
+    if navnode.prev !== nothing
         direction = span[".direction"]("Previous")
-        title = span[".title"](mdconvert(pagetitle(ctx, nn); droplinks=true))
-        link = a[".previous", :href => navhref(ctx, nn, navnode)](direction, title)
+        title = span[".title"](mdconvert(pagetitle(ctx, navnode.prev); droplinks=true))
+        link = a[".previous", :href => navhref(ctx, navnode.prev, navnode)](direction, title)
         push!(art_footer.nodes, link)
     end
 
-    Utilities.unwrap(navnode.next) do nn
+    if navnode.next !== nothing
         direction = span[".direction"]("Next")
-        title = span[".title"](mdconvert(pagetitle(ctx, nn); droplinks=true))
-        link = a[".next", :href => navhref(ctx, nn, navnode)](direction, title)
+        title = span[".title"](mdconvert(pagetitle(ctx, navnode.next); droplinks=true))
+        link = a[".next", :href => navhref(ctx, navnode.next, navnode)](direction, title)
         push!(art_footer.nodes, link)
     end
 
@@ -432,9 +447,9 @@ function render_topbar(ctx, navnode)
 end
 
 function generate_version_file(dir::AbstractString)
-    local named_folders = []
-    local release_folders = []
-    local tag_folders = []
+    named_folders = []
+    release_folders = []
+    tag_folders = []
     for each in readdir(dir)
         each in ("stable", "latest")        ? push!(named_folders,   each) :
         ismatch(r"release\-\d+\.\d+", each) ? push!(release_folders, each) :
@@ -475,20 +490,20 @@ function domify(ctx, navnode)
     ret
 end
 
-type SearchIndexBuffer
+mutable struct SearchIndexBuffer
     ctx :: HTMLContext
-    src :: Compat.String
+    src :: String
     page :: Documents.Page
-    loc :: Compat.String
+    loc :: String
     category :: Symbol
-    title :: Compat.String
-    page_title :: Compat.String
+    title :: String
+    page_title :: String
     buffer :: IOBuffer
     function SearchIndexBuffer(ctx, navnode)
         page_title = mdflatten(pagetitle(ctx, navnode))
         new(
             ctx,
-            pretty_url(ctx, get_url(ctx, get(navnode.page))),
+            pretty_url(ctx, get_url(ctx, navnode.page)),
             getpage(ctx, navnode),
             "",
             :page,
@@ -551,7 +566,7 @@ function domify(ctx, navnode, anchor::Anchors.Anchor)
 end
 
 
-immutable ListBuilder
+struct ListBuilder
     es::Vector
 end
 ListBuilder() = ListBuilder([])
@@ -576,7 +591,7 @@ end
 
 function domify(ctx, navnode, contents::Documents.ContentsNode)
     @tags a
-    navnode_dir = dirname(get(navnode.page))
+    navnode_dir = dirname(navnode.page)
     navnode_url = get_url(ctx, navnode)
     lb = ListBuilder()
     for (count, path, anchor) in contents.elements
@@ -593,7 +608,7 @@ end
 
 function domify(ctx, navnode, index::Documents.IndexNode)
     @tags a code li ul
-    navnode_dir = dirname(get(navnode.page))
+    navnode_dir = dirname(navnode.page)
     navnode_url = get_url(ctx, navnode)
     lis = map(index.elements) do el
         object, doc, path, mod, cat = el
@@ -616,7 +631,7 @@ function domify(ctx, navnode, node::Documents.DocsNode)
     sib = SearchIndexBuffer(ctx, navnode)
     sib.loc = node.anchor.id
     sib.title = string(node.object.binding)
-    sib.category = Utilities.doccat(node.object)
+    sib.category = Symbol(Utilities.doccat(node.object))
     mdflatten(sib.buffer, node.docstr)
     search_flush(sib)
 
@@ -632,7 +647,7 @@ function domify(ctx, navnode, node::Documents.DocsNode)
 end
 
 function domify_doc(ctx, navnode, md::Markdown.MD)
-    @tags a br
+    @tags a
     if haskey(md.meta, :results)
         # The `:results` field contains a vector of `Docs.DocStr` objects associated with
         # each markdown object. The `DocStr` contains data such as file and line info that
@@ -641,9 +656,11 @@ function domify_doc(ctx, navnode, md::Markdown.MD)
             markdown, result = md
             ret = Any[domify(ctx, navnode, Writers.MarkdownWriter.dropheaders(markdown))]
             # When a source link is available then print the link.
-            Utilities.unwrap(Utilities.url(ctx.doc.internal.remote, ctx.doc.user.repo, result)) do url
-                push!(ret, a[".source-link", :target=>"_blank", :href=>url]("source"))
-                push!(ret, br())
+            if !ctx.doc.user.html_disable_git
+                url = Utilities.url(ctx.doc.internal.remote, ctx.doc.user.repo, result)
+                if url !== nothing
+                    push!(ret, a[".source-link", :target=>"_blank", :href=>url]("source"))
+                end
             end
             ret
         end
@@ -681,7 +698,8 @@ end
 
 """
 Get the relative hyperlink between two [`Documents.NavNode`](@ref)s. Assumes that both
-[`Documents.NavNode`](@ref)s have an associated [`Documents.Page`](@ref) (i.e. `.page` is not null).
+[`Documents.NavNode`](@ref)s have an associated [`Documents.Page`](@ref) (i.e. `.page`
+is not `nothing`).
 """
 navhref(ctx, to, from) = pretty_url(ctx, relhref(get_url(ctx, from), get_url(ctx, to)))
 
@@ -699,7 +717,7 @@ end
 Returns the full path corresponding to a path of a `.md` page file. The the input and output
 paths are assumed to be relative to `src/`.
 """
-function get_url(ctx, path)
+function get_url(ctx, path::AbstractString)
     if ctx.doc.user.html_prettyurls
         d = if basename(path) == "index.md"
             dirname(path)
@@ -715,13 +733,13 @@ end
 """
 Returns the full path of a [`Documents.NavNode`](@ref) relative to `src/`.
 """
-get_url(ctx, navnode::Documents.NavNode) = get_url(ctx, get(navnode.page))
+get_url(ctx, navnode::Documents.NavNode) = get_url(ctx, navnode.page)
 
 """
 If `html_prettyurls` is enabled, returns a "pretty" version of the `path` which can then be
 used in links in the resulting HTML file.
 """
-function pretty_url(ctx, path)
+function pretty_url(ctx, path::AbstractString)
     if ctx.doc.user.html_prettyurls
         dir, file = splitdir(path)
         if file == "index.html"
@@ -733,14 +751,14 @@ end
 
 """
 Tries to guess the page title by looking at the `<h1>` headers and returns the
-header contents of the first `<h1>` on a page as a `Nullable` (nulled if the algorithm
+header contents of the first `<h1>` on a page (or `nothing` if the algorithm
 was unable to find any `<h1>` headers).
 """
 function pagetitle(page::Documents.Page)
-    title = Nullable{Any}()
+    title = nothing
     for element in page.elements
         if isa(element, Base.Markdown.Header{1})
-            title = Nullable{Any}(element.text)
+            title = element.text
             break
         end
     end
@@ -748,11 +766,11 @@ function pagetitle(page::Documents.Page)
 end
 
 function pagetitle(ctx, navnode::Documents.NavNode)
-    isnull(navnode.title_override) || return get(navnode.title_override)
+    navnode.title_override === nothing || return navnode.title_override
 
-    if !isnull(navnode.page)
+    if navnode.page !== nothing
         title = pagetitle(getpage(ctx, navnode))
-        isnull(title) || return get(title)
+        title === nothing || return title
     end
 
     "-"
@@ -769,13 +787,13 @@ function collect_subsections(page::Documents.Page)
     title_found = false
     for element in page.elements
         if isa(element, Base.Markdown.Header) && Utilities.header_level(element) < 3
-            local toplevel = Utilities.header_level(element) === 1
+            toplevel = Utilities.header_level(element) === 1
             # Don't include the first header if it is `h1`.
             if toplevel && isempty(sections) && !title_found
                 title_found = true
                 continue
             end
-            local anchor = page.mapping[element]
+            anchor = page.mapping[element]
             push!(sections, (toplevel, "#$(anchor.id)-$(anchor.nth)", element.text))
         end
     end
@@ -787,8 +805,8 @@ end
 # ------------------------------------------------------------------------------
 
 const md_block_nodes = [Markdown.MD, Markdown.BlockQuote]
-fieldtype(Markdown.List, :ordered) == Int && push!(md_block_nodes, Markdown.List)
-if isdefined(Base.Markdown, :Admonition) push!(md_block_nodes, Markdown.Admonition) end
+push!(md_block_nodes, Markdown.List)
+push!(md_block_nodes, Markdown.Admonition)
 
 """
 [`MDBlockContext`](@ref) is a union of all the Markdown nodes whose children should
@@ -831,7 +849,7 @@ function mdconvert(c::Markdown.Code, parent::MDBlockContext; kwargs...)
 end
 mdconvert(c::Markdown.Code, parent; kwargs...) = Tag(:code)(c.code)
 
-mdconvert{N}(h::Markdown.Header{N}, parent; kwargs...) = DOM.Tag(Symbol("h$N"))(mdconvert(h.text, h; kwargs...))
+mdconvert(h::Markdown.Header{N}, parent; kwargs...) where {N} = DOM.Tag(Symbol("h$N"))(mdconvert(h.text, h; kwargs...))
 
 mdconvert(::Markdown.HorizontalRule, parent; kwargs...) = Tag(:hr)()
 
@@ -860,32 +878,21 @@ mdconvert(t::Markdown.Table, parent; kwargs...) = Tag(:table)(
 
 mdconvert(expr::Union{Expr,Symbol}, parent; kwargs...) = string(expr)
 
-# Only available on Julia 0.5.
-if isdefined(Base.Markdown, :Footnote)
-    mdconvert(f::Markdown.Footnote, parent; kwargs...) = footnote(f.id, f.text, parent; kwargs...)
-    footnote(id, text::Void, parent; kwargs...) = Tag(:a)[:href => "#footnote-$(id)"]("[$id]")
-    function footnote(id, text, parent; kwargs...)
-        Tag(:div)[".footnote#footnote-$(id)"](
-            Tag(:a)[:href => "#footnote-$(id)"](Tag(:strong)("[$id]")),
-            mdconvert(text, parent; kwargs...),
-        )
-    end
+mdconvert(f::Markdown.Footnote, parent; kwargs...) = footnote(f.id, f.text, parent; kwargs...)
+footnote(id, text::Void, parent; kwargs...) = Tag(:a)[:href => "#footnote-$(id)"]("[$id]")
+function footnote(id, text, parent; kwargs...)
+    Tag(:div)[".footnote#footnote-$(id)"](
+        Tag(:a)[:href => "#footnote-$(id)"](Tag(:strong)("[$id]")),
+        mdconvert(text, parent; kwargs...),
+    )
 end
 
-if isdefined(Base.Markdown, :Admonition)
-    function mdconvert(a::Markdown.Admonition, parent; kwargs...)
-        @tags div
-        div[".admonition.$(a.category)"](
-            div[".admonition-title"](a.title),
-            div[".admonition-text"](mdconvert(a.content, a; kwargs...))
-        )
-    end
-end
-
-if isdefined(Base.Markdown, :isordered)
-    import Base.Markdown: isordered
-else
-    isordered(a::Markdown.List) = a.ordered::Bool
+function mdconvert(a::Markdown.Admonition, parent; kwargs...)
+    @tags div
+    div[".admonition.$(a.category)"](
+        div[".admonition-title"](a.title),
+        div[".admonition-text"](mdconvert(a.content, a; kwargs...))
+    )
 end
 
 mdconvert(html::Documents.RawHTML, parent; kwargs...) = Tag(Symbol("#RAW#"))(html.code)
@@ -907,11 +914,11 @@ function fixlinks!(ctx, navnode, link::Markdown.Link)
     startswith(link.url, '#') && return
 
     s = split(link.url, "#", limit = 2)
-    if is_windows() && ':' in first(s)
-        Utilities.warn("Invalid local link: colons not allowed in paths on Windows\n    '$(link.url)' in $(get(navnode.page))")
+    if Compat.Sys.iswindows() && ':' in first(s)
+        Utilities.warn("Invalid local link: colons not allowed in paths on Windows\n    '$(link.url)' in $(navnode.page)")
         return
     end
-    path = normpath(joinpath(dirname(get(navnode.page)), first(s)))
+    path = normpath(joinpath(dirname(navnode.page), first(s)))
 
     if endswith(path, ".md") && path in keys(ctx.doc.internal.pages)
         # make sure that links to different valid pages are correct
@@ -921,7 +928,7 @@ function fixlinks!(ctx, navnode, link::Markdown.Link)
         # provided files or generated by code examples)
         path = relhref(get_url(ctx, navnode), path)
     else
-        Utilities.warn("Invalid local link: unresolved path\n    '$(link.url)' in $(get(navnode.page))")
+        Utilities.warn("Invalid local link: unresolved path\n    '$(link.url)' in $(navnode.page)")
     end
 
     # Replace any backslashes in links, if building the docs on Windows
@@ -932,18 +939,18 @@ end
 function fixlinks!(ctx, navnode, img::Markdown.Image)
     Utilities.isabsurl(img.url) && return
 
-    if is_windows() && ':' in img.url
-        Utilities.warn("Invalid local image: colons not allowed in paths on Windows\n    '$(img.url)' in $(get(navnode.page))")
+    if Compat.Sys.iswindows() && ':' in img.url
+        Utilities.warn("Invalid local image: colons not allowed in paths on Windows\n    '$(img.url)' in $(navnode.page)")
         return
     end
 
-    path = joinpath(dirname(get(navnode.page)), img.url)
+    path = joinpath(dirname(navnode.page), img.url)
     if isfile(joinpath(ctx.doc.user.build, path))
         path = relhref(get_url(ctx, navnode), path)
         # Replace any backslashes in links, if building the docs on Windows
         img.url = replace(path, '\\', '/')
     else
-        Utilities.warn("Invalid local image: unresolved path\n    '$(img.url)' in `$(get(navnode.page))`")
+        Utilities.warn("Invalid local image: unresolved path\n    '$(img.url)' in `$(navnode.page)`")
     end
 end
 

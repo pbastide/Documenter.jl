@@ -4,11 +4,12 @@ makedocs(
     modules = [Documenter],
     clean = false,
     format = :html,
+    assets = ["assets/favicon.ico"],
     sitename = "Documenter.jl",
     authors = "Michael Hatherly, Morten Piibeleht, and contributors.",
     analytics = "UA-89508993-1",
     linkcheck = !("skiplinks" in ARGS),
-    pages = Any[ # Compat: `Any` for 0.4 compat
+    pages = [
         "Home" => "index.md",
         "Manual" => Any[
             "Guide" => "man/guide.md",

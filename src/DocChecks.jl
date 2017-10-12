@@ -63,8 +63,8 @@ end
 function allbindings(checkdocs::Symbol, mod::Module, out = Dict{Utilities.Binding, Set{Type}}())
     for (obj, doc) in meta(mod)
         isa(obj, ObjectIdDict) && continue
-        local name = nameof(obj)
-        local isexported = Base.isexported(mod, name)
+        name = nameof(obj)
+        isexported = Base.isexported(mod, name)
         if checkdocs === :all || (isexported && checkdocs === :exports)
             out[Utilities.Binding(mod, name)] = Set(sigs(doc))
         end
@@ -72,27 +72,14 @@ function allbindings(checkdocs::Symbol, mod::Module, out = Dict{Utilities.Bindin
     out
 end
 
-if isdefined(Base.Docs, :META′) # 0.4
-    meta(m) = isdefined(m, Docs.META′) ? Docs.meta(m) : ObjectIdDict()
-else # 0.5
-    meta(m) = Docs.meta(m)
-end
+meta(m) = Docs.meta(m)
 
-if isleaftype(Function) # 0.4
-    nameof(x::Function) = x.env.name
-else # 0.5
-    nameof(x::Function) = typeof(x).name.mt.name
-end
+nameof(x::Function)          = typeof(x).name.mt.name
 nameof(b::Base.Docs.Binding) = b.var
 nameof(x::DataType)          = x.name.name
 nameof(m::Module)            = module_name(m)
 
-if isdefined(Base.Docs, :MultiDoc) # 0.5
-    sigs(x::Base.Docs.MultiDoc) = x.order
-else # 0.4
-    sigs(x::Base.Docs.FuncDoc) = x.order
-    sigs(x::Base.Docs.TypeDoc) = x.order
-end
+sigs(x::Base.Docs.MultiDoc) = x.order
 sigs(::Any) = Type[Union{}]
 
 # Julia code block testing.
@@ -128,19 +115,19 @@ function __ans__!(m::Module, value)
 end
 
 function doctest(block::Markdown.Code, meta::Dict, doc::Documents.Document, page)
-    local matched = Utilities.nullmatch(r"jldoctest[ ]?(.*)$", block.language)
-    if !isnull(matched)
+    m = match(r"jldoctest[ ]?(.*)$", block.language)
+    if m !== nothing
         # Define new module or reuse an old one from this page if we have a named doctest.
-        local name = Utilities.getmatch(matched, 1)
-        local sym = isempty(name) ? gensym("doctest-") : Symbol("doctest-", name)
-        local sandbox = get!(page.globals.meta, sym) do
+        name = m[1]
+        sym = isempty(name) ? gensym("doctest-") : Symbol("doctest-", name)
+        sandbox = get!(page.globals.meta, sym) do
             newmod = Module(sym)
-            eval(newmod, :(eval(x) = Core.eval(current_module(), x)))
+            eval(newmod, :(eval(x) = Core.eval($newmod, x)))
             eval(newmod, :(eval(m, x) = Core.eval(m, x)))
             newmod
         end
         # Normalise line endings.
-        local code = replace(block.code, "\r\n", "\n")
+        code = replace(block.code, "\r\n", "\n")
         if haskey(meta, :DocTestSetup)
             expr = meta[:DocTestSetup]
             Meta.isexpr(expr, :block) && (expr.head = :toplevel)
@@ -176,11 +163,11 @@ end
 
 # Doctest evaluation.
 
-type Result
-    code   :: Compat.String # The entire code block that is being tested.
-    input  :: Compat.String # Part of `code` representing the current input.
-    output :: Compat.String # Part of `code` representing the current expected output.
-    file   :: Compat.String # File in which the doctest is written. Either `.md` or `.jl`.
+mutable struct Result
+    code   :: String # The entire code block that is being tested.
+    input  :: String # Part of `code` representing the current input.
+    output :: String # Part of `code` representing the current expected output.
+    file   :: String # File in which the doctest is written. Either `.md` or `.jl`.
     value  :: Any        # The value returned when evaluating `input`.
     hide   :: Bool       # Semi-colon suppressing the output?
     stdout :: IOBuffer   # Redirected STDOUT/STDERR gets sent here.
@@ -196,7 +183,7 @@ function eval_repl(code, sandbox, meta::Dict, doc::Documents.Document, page)
         result = Result(code, input, output, meta[:CurrentFile])
         for (ex, str) in Utilities.parseblock(input, doc, page; keywords = false)
             # Input containing a semi-colon gets suppressed in the final output.
-            result.hide = ends_with_semicolon(str)
+            result.hide = Base.REPL.ends_with_semicolon(str)
             (value, success, backtrace, text) = Utilities.withoutput() do
                 disable_color() do
                     Core.eval(sandbox, ex)
@@ -239,13 +226,17 @@ end
 
 # Regex used here to replace gensym'd module names could probably use improvements.
 function checkresult(sandbox::Module, result::Result, doc::Documents.Document)
-    local mod_regex = Regex("(Symbol\\(\"$(sandbox)\"\\)|$(sandbox))[,.]")
+    sandbox_name = module_name(sandbox)
+    mod_regex = Regex("(Main\\.)?(Symbol\\(\"$(sandbox_name)\"\\)|$(sandbox_name))[,.]")
+    mod_regex_nodot = Regex(("(Main\\.)?$(sandbox_name)"))
     if isdefined(result, :bt) # An error was thrown and we have a backtrace.
         # To avoid dealing with path/line number issues in backtraces we use `[...]` to
         # mark ignored output from an error message. Only the text prior to it is used to
         # test for doctest success/failure.
         head = replace(split(result.output, "\n[...]"; limit = 2)[1], mod_regex, "")
+        head = replace(head, mod_regex_nodot, "Main")
         str  = replace(error_to_string(result.stdout, result.value, result.bt), mod_regex, "")
+        str  = replace(str, mod_regex_nodot, "Main")
         # Since checking for the prefix of an error won't catch the empty case we need
         # to check that manually with `isempty`.
         if isempty(head) || !startswith(str, head)
@@ -255,23 +246,11 @@ function checkresult(sandbox::Module, result::Result, doc::Documents.Document)
         value = result.hide ? nothing : result.value # `;` hides output.
         str = replace(result_to_string(result.stdout, value), mod_regex, "")
         # Replace a standalone module name with `Main`.
-        str = replace(str, Regex(string(sandbox)), "Main")
+        str = replace(str, mod_regex_nodot, "Main")
         output = replace(strip(sanitise(IOBuffer(result.output))), mod_regex, "")
         strip(str) == output || report(result, str, doc)
     end
     return nothing
-end
-
-# from base/REPL.jl
-function ends_with_semicolon(line)
-    match = rsearch(line, ';')
-    if match != 0
-        for c in line[(match+1):end]
-            isspace(c) || return c == '#'
-        end
-        return true
-    end
-    return false
 end
 
 # Display doctesting results.
@@ -284,40 +263,20 @@ function result_to_string(buf, value)
     sanitise(buf)
 end
 
-if VERSION < v"0.5.0-dev+4305"
-    text_display(buf) = TextDisplay(buf)
-else
-    text_display(buf) = TextDisplay(IOContext(buf, :limit => true))
-end
+text_display(buf) = TextDisplay(IOContext(buf, :limit => true))
 
 funcsym() = CAN_INLINE[] ? :disable_color : :eval
 
-if isdefined(Base.REPL, :ip_matches_func)
-    function error_to_string(buf, er, bt)
-        local fs = funcsym()
-        # Remove unimportant backtrace info.
-        local index = findlast(ptr -> Base.REPL.ip_matches_func(ptr, fs), bt)
-        # Print a REPL-like error message.
-        disable_color() do
-            print(buf, "ERROR: ")
-            showerror(buf, er, index == 0 ? bt : bt[1:(index - 1)])
-        end
-        sanitise(buf)
+function error_to_string(buf, er, bt)
+    fs = funcsym()
+    # Remove unimportant backtrace info.
+    index = findlast(ptr -> Base.REPL.ip_matches_func(ptr, fs), bt)
+    # Print a REPL-like error message.
+    disable_color() do
+        print(buf, "ERROR: ")
+        showerror(buf, er, index == 0 ? bt : bt[1:(index - 1)])
     end
-else
-    # Compat for Julia 0.4.
-    function error_to_string(buf, er, bt)
-        local fs = funcsym()
-        disable_color() do
-            print(buf, "ERROR: ")
-            try
-                Base.showerror(buf, er)
-            finally
-                Base.show_backtrace(buf, fs, bt, 1:typemax(Int))
-            end
-        end
-        sanitise(buf)
-    end
+    sanitise(buf)
 end
 
 # Strip trailing whitespace and remove terminal colors.
@@ -332,7 +291,7 @@ end
 import .Utilities.TextDiff
 
 function report(result::Result, str, doc::Documents.Document)
-    local buffer = IOBuffer()
+    buffer = IOBuffer()
     println(buffer, "=====[Test Error]", "="^30)
     println(buffer)
     print_with_color(:cyan, buffer, "> File: ", result.file, "\n")
@@ -344,9 +303,9 @@ function report(result::Result, str, doc::Documents.Document)
         print_with_color(:cyan, buffer, "\n> Subexpression:\n")
         print_indented(buffer, result.input; indent = 4)
     end
-    local warning = Base.have_color ? "" : " (REQUIRES COLOR)"
+    warning = Base.have_color ? "" : " (REQUIRES COLOR)"
     print_with_color(:cyan, buffer, "\n> Output Diff", warning, ":\n\n")
-    local diff = TextDiff.Diff{TextDiff.Words}(result.output, rstrip(str))
+    diff = TextDiff.Diff{TextDiff.Words}(result.output, rstrip(str))
     Utilities.TextDiff.showdiff(buffer, diff)
     println(buffer, "\n\n", "=====[End Error]=", "="^30)
     push!(doc.internal.errors, :doctest)
@@ -369,30 +328,33 @@ remove_term_colors(s) = replace(s, TERM_COLOR_REGEX, "")
 
 const PROMPT_REGEX = r"^julia> (.*)$"
 const SOURCE_REGEX = r"^       (.*)$"
+const ANON_FUNC_DECLARATION = r"#[0-9]+ \(generic function with [0-9]+ method(s)?\)"
 
 function repl_splitter(code)
     lines  = split(string(code, "\n"), '\n')
-    input  = Compat.String[]
-    output = Compat.String[]
+    input  = String[]
+    output = String[]
     buffer = IOBuffer()
     while !isempty(lines)
         line = shift!(lines)
         # REPL code blocks may contain leading lines with comments. Drop them.
         # TODO: handle multiline comments?
-        startswith(line, '#') && continue
-        prompt = Utilities.nullmatch(PROMPT_REGEX, line)
-        if isnull(prompt)
-            source = Utilities.nullmatch(SOURCE_REGEX, line)
-            if isnull(source)
+        # ANON_FUNC_DECLARATION deals with `x->x` -> `#1 (generic function ....)` on 0.7
+        # TODO: Remove this special case and just disallow lines with comments?
+        startswith(line, '#') && !ismatch(ANON_FUNC_DECLARATION, line) && continue
+        prompt = match(PROMPT_REGEX, line)
+        if prompt === nothing
+            source = match(SOURCE_REGEX, line)
+            if source === nothing
                 savebuffer!(input, buffer)
                 println(buffer, line)
                 takeuntil!(PROMPT_REGEX, buffer, lines)
             else
-                println(buffer, Utilities.getmatch(source, 1))
+                println(buffer, source[1])
             end
         else
             savebuffer!(output, buffer)
-            println(buffer, Utilities.getmatch(prompt, 1))
+            println(buffer, prompt[1])
         end
     end
     savebuffer!(output, buffer)
@@ -407,7 +369,7 @@ end
 function takeuntil!(r, buf, lines)
     while !isempty(lines)
         line = lines[1]
-        if isnull(Utilities.nullmatch(r, line))
+        if !ismatch(r, line)
             println(buf, shift!(lines))
         else
             break
@@ -418,64 +380,59 @@ end
 # Footnote checks.
 # ----------------
 
-if isdefined(Base.Markdown, :Footnote)
-    function footnotes(doc::Documents.Document)
-        println(" > checking footnote links.")
-        # A mapping of footnote ids to a tuple counter of how many footnote references and
-        # footnote bodies have been found.
-        #
-        # For all ids the final result should be `(N, 1)` where `N > 1`, i.e. one or more
-        # footnote references and a single footnote body.
-        local footnotes = Dict{Documents.Page, Dict{Compat.String, Tuple{Int, Int}}}()
-        for (src, page) in doc.internal.pages
-            empty!(page.globals.meta)
-            local orphans = Dict{Compat.String, Tuple{Int, Int}}()
-            for element in page.elements
-                Walkers.walk(page.globals.meta, page.mapping[element]) do block
-                    footnote(block, orphans)
-                end
+function footnotes(doc::Documents.Document)
+    println(" > checking footnote links.")
+    # A mapping of footnote ids to a tuple counter of how many footnote references and
+    # footnote bodies have been found.
+    #
+    # For all ids the final result should be `(N, 1)` where `N > 1`, i.e. one or more
+    # footnote references and a single footnote body.
+    footnotes = Dict{Documents.Page, Dict{String, Tuple{Int, Int}}}()
+    for (src, page) in doc.internal.pages
+        empty!(page.globals.meta)
+        orphans = Dict{String, Tuple{Int, Int}}()
+        for element in page.elements
+            Walkers.walk(page.globals.meta, page.mapping[element]) do block
+                footnote(block, orphans)
             end
-            footnotes[page] = orphans
         end
-        for (page, orphans) in footnotes
-            for (id, (ids, bodies)) in orphans
-                # Multiple footnote bodies.
-                if bodies > 1
-                    push!(doc.internal.errors, :footnote)
-                    Utilities.warn(page.source, "Footnote '$id' has $bodies bodies.")
-                end
-                # No footnote references for an id.
-                if ids === 0
-                    push!(doc.internal.errors, :footnote)
-                    Utilities.warn(page.source, "Unused footnote named '$id'.")
-                end
-                # No footnote bodies for an id.
-                if bodies === 0
-                    push!(doc.internal.errors, :footnote)
-                    Utilities.warn(page.source, "No footnotes found for '$id'.")
-                end
+        footnotes[page] = orphans
+    end
+    for (page, orphans) in footnotes
+        for (id, (ids, bodies)) in orphans
+            # Multiple footnote bodies.
+            if bodies > 1
+                push!(doc.internal.errors, :footnote)
+                Utilities.warn(page.source, "Footnote '$id' has $bodies bodies.")
+            end
+            # No footnote references for an id.
+            if ids === 0
+                push!(doc.internal.errors, :footnote)
+                Utilities.warn(page.source, "Unused footnote named '$id'.")
+            end
+            # No footnote bodies for an id.
+            if bodies === 0
+                push!(doc.internal.errors, :footnote)
+                Utilities.warn(page.source, "No footnotes found for '$id'.")
             end
         end
     end
-
-    function footnote(fn::Markdown.Footnote, orphans::Dict)
-        ids, bodies = get(orphans, fn.id, (0, 0))
-        if fn.text === nothing
-            # Footnote references: syntax `[^1]`.
-            orphans[fn.id] = (ids + 1, bodies)
-            return false # No more footnotes inside footnote references.
-        else
-            # Footnote body: syntax `[^1]:`.
-            orphans[fn.id] = (ids, bodies + 1)
-            return true # Might be footnotes inside footnote bodies.
-        end
-    end
-
-    footnote(other, orphans::Dict) = true
-else
-    footnotes(doc::Documents.Document) = nothing
 end
 
+function footnote(fn::Markdown.Footnote, orphans::Dict)
+    ids, bodies = get(orphans, fn.id, (0, 0))
+    if fn.text === nothing
+        # Footnote references: syntax `[^1]`.
+        orphans[fn.id] = (ids + 1, bodies)
+        return false # No more footnotes inside footnote references.
+    else
+        # Footnote body: syntax `[^1]:`.
+        orphans[fn.id] = (ids, bodies + 1)
+        return true # Might be footnotes inside footnote bodies.
+    end
+end
+
+footnote(other, orphans::Dict) = true
 
 # Link Checks.
 # ------------
@@ -503,7 +460,7 @@ function linkcheck(doc::Documents.Document)
 end
 
 function linkcheck(link::Base.Markdown.Link, doc::Documents.Document)
-    local INDENT = " "^6
+    INDENT = " "^6
 
     # first, make sure we're not supposed to ignore this link
     for r in doc.user.linkcheck_ignore
@@ -516,7 +473,7 @@ function linkcheck(link::Base.Markdown.Link, doc::Documents.Document)
     if !haskey(doc.internal.locallinks, link)
         local result
         try
-            result = readstring(`curl -sI $(link.url)`)
+            result = read(`curl -sI $(link.url)`, String)
         catch err
             push!(doc.internal.errors, :linkcheck)
             Utilities.warn("`curl -sI $(link.url)` failed:\n\n$(err)")
@@ -524,13 +481,13 @@ function linkcheck(link::Base.Markdown.Link, doc::Documents.Document)
         end
         local STATUS_REGEX   = r"^HTTP/1.1 (\d+) (.+)$"m
         if ismatch(STATUS_REGEX, result)
-            local status = parse(Int, match(STATUS_REGEX, result).captures[1])
+            status = parse(Int, match(STATUS_REGEX, result).captures[1])
             if status < 300
                 print_with_color(:green, INDENT, "$(status) ", link.url, "\n")
             elseif status < 400
-                local LOCATION_REGEX = r"^Location: (.+)$"m
+                LOCATION_REGEX = r"^Location: (.+)$"m
                 if ismatch(LOCATION_REGEX, result)
-                    local location = strip(match(LOCATION_REGEX, result).captures[1])
+                    location = strip(match(LOCATION_REGEX, result).captures[1])
                     print_with_color(:yellow, INDENT, "$(status) ", link.url, "\n")
                     print_with_color(:yellow, INDENT, " -> ", location, "\n\n")
                 else
