@@ -468,7 +468,7 @@ Handles pushing changes to the remote documentation branch.
 function git_push(
         root, temp, repo;
         branch="gh-pages", dirname="", target="site", tag="", key="", sha="",
-        figs_dir = "/assets/figures", draw_fig = "false" 
+        figs_dir = "/assets/figures", draw_fig = false 
     )
     dirname = isempty(dirname) ? temp : joinpath(temp, dirname)
     isdir(dirname) || mkpath(dirname)
