@@ -1,4 +1,5 @@
 using Compat
+using Compat: @info
 
 # Defines the modules referred to in the example docs (under src/) and then builds them.
 # It can be called separately to build the examples/, or as part of the test suite.
@@ -86,7 +87,7 @@ using Documenter
 
 const examples_root = dirname(@__FILE__)
 
-info("Building mock package docs: MarkdownWriter")
+@info("Building mock package docs: MarkdownWriter")
 examples_markdown_doc = makedocs(
     debug = true,
     root  = examples_root,
@@ -94,7 +95,7 @@ examples_markdown_doc = makedocs(
     doctest = false,
 )
 
-info("Building mock package docs: HTMLWriter")
+@info("Building mock package docs: HTMLWriter")
 examples_html_doc = makedocs(
     debug = true,
     root  = examples_root,
@@ -126,13 +127,14 @@ examples_html_doc = makedocs(
     html_edit_branch = nothing,
 )
 
-info("Building mock package docs: HTMLWriter with pretty URLs")
+@info("Building mock package docs: HTMLWriter with pretty URLs and canonical links")
 examples_html_doc = makedocs(
     debug = true,
     root  = examples_root,
     build = "builds/html-pretty-urls",
     format   = :html,
     html_prettyurls = true,
+    html_canonical = "https://example.com/stable",
     doctestfilters = [r"Ptr{0x[0-9]+}"],
     assets = [
         "assets/favicon.ico",
