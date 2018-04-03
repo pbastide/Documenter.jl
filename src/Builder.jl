@@ -108,7 +108,7 @@ function Selectors.runner(::Type{SetupBuildDirectory}, doc::Documents.Document)
                 push!(mdpages, Utilities.srcpath(source, root, file))
                 Documents.addpage!(doc, src, dst)
             else
-                cp(src, dst; remove_destination = true)
+                Compat.cp(src, dst; force = true)
             end
         end
     end
@@ -127,7 +127,7 @@ function Selectors.runner(::Type{SetupBuildDirectory}, doc::Documents.Document)
 
     # Finally we populate the .next and .prev fields of the navnodes that point
     # to actual pages.
-    local prev::Union{Documents.NavNode, Void} = nothing
+    local prev::Union{Documents.NavNode, Nothing} = nothing
     for navnode in doc.internal.navlist
         navnode.prev = prev
         if prev !== nothing

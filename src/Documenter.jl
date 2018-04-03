@@ -17,6 +17,23 @@ $(EXPORTS)
 module Documenter
 
 using Compat, DocStringExtensions
+import Compat.Base64: base64decode, base64encode
+import Compat: @info
+import Compat.Pkg
+
+@static if VERSION < v"0.7.0-DEV.3439"
+    const IdDict = Base.ObjectIdDict
+else
+    const IdDict = Base.IdDict{Any,Any}
+end
+
+@static if VERSION < v"0.7.0-DEV.3500"
+    import Base.REPL
+    using Base.REPL: ip_matches_func
+else
+    import REPL
+    using Base: ip_matches_func
+end
 
 # Submodules
 # ----------
@@ -35,12 +52,13 @@ include("DocChecks.jl")
 include("Writers/Writers.jl")
 include("Deps.jl")
 include("Generator.jl")
+include("Travis.jl")
 
 
 # User Interface.
 # ---------------
 
-export Deps, makedocs, deploydocs, hide
+export Travis, Deps, makedocs, deploydocs, hide
 
 """
     makedocs(
@@ -134,7 +152,7 @@ value of the generated link:
 For example if you are using GitLab.com, you could use
 
 ```julia
-makedocs(repo = \"https://gitlab.com/user/project/blob/{commit}{path}#L{line}\")
+makedocs(repo = \"https://gitlab.com/user/project/blob/{commit}{path}#{line}\")
 ```
 
 # Experimental keywords
@@ -364,13 +382,13 @@ function deploydocs(;
     if !isa(julia, AbstractString)
         error("julia must be a string, got $julia ($(typeof(julia)))")
     end
-    if !isempty(travis_repo_slug) && !contains(repo, travis_repo_slug)
+    if !isempty(travis_repo_slug) && !occursin(travis_repo_slug, repo)
         warn("repo $repo does not match $travis_repo_slug")
     end
 
     # When should a deploy be attempted?
     should_deploy =
-        contains(repo, travis_repo_slug) &&
+        occursin(travis_repo_slug, repo) &&
         travis_pull_request == "false"   &&
         travis_osname == osname &&
         travis_julia  == julia  &&
@@ -424,98 +442,120 @@ function deploydocs(;
             end
             Utilities.log("pushing new documentation to remote: $repo:$branch.")
             mktempdir() do temp
-                dirname = isempty(dirname) ? temp : joinpath(temp, dirname)
-                isdir(dirname) || mkpath(dirname)
-                # Versioned docs directories.
-                latest_dir = joinpath(dirname, "latest")
-                stable_dir = joinpath(dirname, "stable")
-                tagged_dir = joinpath(dirname, travis_tag)
-
-                keyfile = abspath(joinpath(root, ".documenter"))
-                target_dir = abspath(target)
-
-                # The upstream URL to which we push new content and the ssh decryption commands.
-                write(keyfile, String(base64decode(documenter_key)))
-                chmod(keyfile, 0o600)
-                upstream = "git@$(replace(repo, "github.com/", "github.com:"))"
-
-                # Use a custom SSH config file to avoid overwriting the default user config.
-                withfile(joinpath(homedir(), ".ssh", "config"),
-                    """
-                    Host github.com
-                        StrictHostKeyChecking no
-                        HostName github.com
-                        IdentityFile $keyfile
-                    """
-                ) do
-                    cd(temp) do
-                        # Setup git.
-                        run(`git init`)
-                        run(`git config user.name "autodocs"`)
-                        run(`git config user.email "autodocs"`)
-
-                        # Fetch from remote and checkout the branch.
-                        success(`git remote add upstream $upstream`) ||
-                            error("could not add new remote repo.")
-
-                        success(`git fetch upstream`) ||
-                            error("could not fetch from remote.")
-
-                        branch_exists = success(`git checkout -b $branch upstream/$branch`)
-
-                        if !branch_exists
-                            Utilities.log("assuming $branch doesn't exist yet; creating a new one.")
-                            success(`git checkout --orphan $branch`) ||
-                                error("could not create new empty branch.")
-                            success(`git commit --allow-empty -m "Initial empty commit for docs"`) ||
-                                error("could not commit to new branch $branch")
-                        end
-
-                        # Copy docs to `latest`, or `stable`, `<release>`, and `<version>` directories.
-                        if isempty(travis_tag)
-                            if !draw_fig
-                                # If figures not drawn, then keep old ones
-                                # (only for latest: always draw figures for stable/tagged)
-                                cp(latest_dir*figs_dir, target_dir*figs_dir; remove_destination = true)
-                            end
-                            gitrm_copy(target_dir, latest_dir)
-                            Writers.HTMLWriter.generate_siteinfo_file(latest_dir, "latest")
-                        else
-                            gitrm_copy(target_dir, stable_dir)
-                            Writers.HTMLWriter.generate_siteinfo_file(stable_dir, "stable")
-                            gitrm_copy(target_dir, tagged_dir)
-                            Writers.HTMLWriter.generate_siteinfo_file(tagged_dir, travis_tag)
-                            # Build a `release-*.*` folder as well when the travis tag is
-                            # valid, which it *should* always be anyway.
-                            if ismatch(Base.VERSION_REGEX, travis_tag)
-                                version = VersionNumber(travis_tag)
-                                release = "release-$(version.major).$(version.minor)"
-                                gitrm_copy(target_dir, joinpath(dirname, release))
-                                Writers.HTMLWriter.generate_siteinfo_file(joinpath(dirname, release), release)
-                            end
-                        end
-
-                        # Create the versions.js file containing a list of all docs
-                        # versions. This must always happen after the folder copying.
-                        Writers.HTMLWriter.generate_version_file(dirname)
-
-                        # Add, commit, and push the docs to the remote.
-                        run(`git add -A .`)
-                        try run(`git commit -m "build based on $sha"`) end
-
-                        success(`git push -q upstream HEAD:$branch`) ||
-                            error("could not push to remote repo.")
-
-                        # Remove the unencrypted private key.
-                        isfile(keyfile) && rm(keyfile)
-                    end
-                end
+                git_push(
+                    root, temp, repo;
+                    branch=branch, dirname=dirname, target=target,
+                    tag=travis_tag, key=documenter_key, sha=sha,
+                    figs_dir = figs_dir
+                )
             end
         end
     else
         Utilities.log("""
             skipping docs deployment.
               You can set DOCUMENTER_DEBUG to "true" in Travis to see more information.""")
+    end
+end
+
+"""
+    git_push(
+        root, tmp, repo;
+        branch="gh-pages", dirname="", target="site", tag="", key="", sha=""
+    )
+
+Handles pushing changes to the remote documentation branch.
+"""
+function git_push(
+        root, temp, repo;
+        branch="gh-pages", dirname="", target="site", tag="", key="", sha="",
+        figs_dir = "/assets/figures"
+    )
+    dirname = isempty(dirname) ? temp : joinpath(temp, dirname)
+    isdir(dirname) || mkpath(dirname)
+    # Versioned docs directories.
+    latest_dir = joinpath(dirname, "latest")
+    stable_dir = joinpath(dirname, "stable")
+    tagged_dir = joinpath(dirname, tag)
+
+    keyfile = abspath(joinpath(root, ".documenter"))
+    target_dir = abspath(target)
+
+    # The upstream URL to which we push new content and the ssh decryption commands.
+    upstream = "git@$(replace(repo, "github.com/" => "github.com:"))"
+
+    write(keyfile, String(base64decode(key)))
+    chmod(keyfile, 0o600)
+
+    try
+        # Use a custom SSH config file to avoid overwriting the default user config.
+        withfile(joinpath(homedir(), ".ssh", "config"),
+            """
+            Host github.com
+                StrictHostKeyChecking no
+                HostName github.com
+                IdentityFile $keyfile
+            """
+        ) do
+            cd(temp) do
+                # Setup git.
+                run(`git init`)
+                run(`git config user.name "autodocs"`)
+                run(`git config user.email "autodocs"`)
+
+                # Fetch from remote and checkout the branch.
+                run(`git remote add upstream $upstream`)
+                run(`git fetch upstream`)
+
+                try
+                    run(`git checkout -b $branch upstream/$branch`)
+                catch e
+                    Utilities.log("Checking out $branch failed with error: $e")
+                    Utilities.log("Creating a new local $branch branch.")
+                    run(`git checkout --orphan $branch`)
+                    run(`git commit --allow-empty -m "Initial empty commit for docs"`)
+                end
+
+                # Copy docs to `latest`, or `stable`, `<release>`, and `<version>` directories.
+                if isempty(tag)
+                    if !draw_fig
+                        # If figures not drawn, then keep old ones
+                        # (only for latest: always draw figures for stable/tagged)
+                        cp(latest_dir*figs_dir, target_dir*figs_dir; remove_destination = true)
+                    end
+                    gitrm_copy(target_dir, latest_dir)
+                    Writers.HTMLWriter.generate_siteinfo_file(latest_dir, "latest")
+                else
+                    gitrm_copy(target_dir, stable_dir)
+                    Writers.HTMLWriter.generate_siteinfo_file(stable_dir, "stable")
+                    gitrm_copy(target_dir, tagged_dir)
+                    Writers.HTMLWriter.generate_siteinfo_file(tagged_dir, tag)
+                    # Build a `release-*.*` folder as well when the travis tag is
+                    # valid, which it *should* always be anyway.
+                    if occursin(Base.VERSION_REGEX, tag)
+                        version = VersionNumber(tag)
+                        release = "release-$(version.major).$(version.minor)"
+                        gitrm_copy(target_dir, joinpath(dirname, release))
+                        Writers.HTMLWriter.generate_siteinfo_file(joinpath(dirname, release), release)
+                    end
+                end
+
+                # Create the versions.js file containing a list of all docs
+                # versions. This must always happen after the folder copying.
+                Writers.HTMLWriter.generate_version_file(dirname)
+
+                # Add, commit, and push the docs to the remote.
+                run(`git add -A .`)
+                if !success(`git diff --cached --exit-code`)
+                    run(`git commit -m "build based on $sha"`)
+                    run(`git push -q upstream HEAD:$branch`)
+                else
+                    Utilities.log("New docs identical to the old -- not committing nor pushing.")
+                end
+            end
+        end
+    finally
+        # Remove the unencrypted private key.
+        isfile(keyfile) && rm(keyfile)
     end
 end
 
@@ -532,7 +572,7 @@ first, `git add -A` will not detect case changes in filenames.
 function gitrm_copy(src, dst)
     # --ignore-unmatch so that we wouldn't get errors if dst does not exist
     run(`git rm -rf --ignore-unmatch $(dst)`)
-    cp(src, dst)
+    Compat.cp(src, dst; force=true)
 end
 
 function withfile(func, file::AbstractString, contents::AbstractString)
@@ -557,106 +597,9 @@ end
 
 function getenv(regex::Regex)
     for (key, value) in ENV
-        ismatch(regex, key) && return value
+        occursin(regex, key) && return value
     end
     error("could not find key/iv pair.")
-end
-
-export Travis
-
-"""
-Package functions for interacting with Travis.
-
-$(EXPORTS)
-"""
-module Travis
-
-using Compat, DocStringExtensions
-
-export genkeys
-
-import Base.LibGit2.GITHUB_REGEX
-
-
-"""
-$(SIGNATURES)
-
-Generate ssh keys for package `package` to automatically deploy docs from Travis to GitHub
-pages. `package` can be either the name of a package or a path. Providing a path allows keys
-to be generated for non-packages or packages that are not found in the Julia `LOAD_PATH`.
-Use the `remote` keyword to specify the user and repository values.
-
-This function requires the following command lines programs to be installed:
-
-- `which`
-- `git`
-- `travis`
-- `ssh-keygen`
-
-# Examples
-
-```jlcon
-julia> using Documenter
-
-julia> Travis.genkeys("MyPackageName")
-[ ... output ... ]
-
-julia> Travis.genkeys("MyPackageName", remote="organization")
-[ ... output ... ]
-
-julia> Travis.genkeys("/path/to/target/directory")
-[ ... output ... ]
-```
-"""
-function genkeys(package; remote="origin")
-    # Error checking. Do the required programs exist?
-    success(`which which`)      || error("'which' not found.")
-    success(`which git`)        || error("'git' not found.")
-    success(`which ssh-keygen`) || error("'ssh-keygen' not found.")
-
-    directory = "docs"
-    filename  = ".documenter"
-
-    path = isdir(package) ? package : Pkg.dir(package, directory)
-    isdir(path) || error("`$path` not found. Provide a package name or directory.")
-
-    cd(path) do
-        # Check for old '$filename.enc' and terminate.
-        isfile("$filename.enc") &&
-            error("$package already has an ssh key. Remove it and try again.")
-
-        # Are we in a git repo?
-        success(`git status`) || error("'Travis.genkey' only works with git repositories.")
-
-        # Find the GitHub repo org and name.
-        user, repo =
-            let r = readchomp(`git config --get remote.$remote.url`)
-                m = match(GITHUB_REGEX, r)
-                m === nothing && error("no remote repo named '$remote' found.")
-                m[2], m[3]
-            end
-
-        # Generate the ssh key pair.
-        success(`ssh-keygen -N "" -f $filename`) || error("failed to generated ssh key pair.")
-
-        # Prompt user to add public key to github then remove the public key.
-        let url = "https://github.com/$user/$repo/settings/keys"
-            info("add the public key below to $url with read/write access:")
-            println("\n", read("$filename.pub", String))
-            rm("$filename.pub")
-        end
-
-        # Base64 encode the private key and prompt user to add it to travis. The key is
-        # *not* encoded for the sake of security, but instead to make it easier to
-        # copy/paste it over to travis without having to worry about whitespace.
-        let url = "https://travis-ci.org/$user/$repo/settings"
-            info("add a secure environment variable named 'DOCUMENTER_KEY' to $url with value:")
-            println("\n", base64encode(read(".documenter", String)), "\n")
-            rm(filename)
-        end
-    end
-end
-
 end
 
 """
@@ -722,7 +665,7 @@ function generate(pkgname::AbstractString; dir=nothing)
 
     # deploy the stub
     try
-        info("Deploying documentation to $(docroot)")
+        @info("Deploying documentation to $(docroot)")
         mkdir(docroot)
 
         # create the root doc files

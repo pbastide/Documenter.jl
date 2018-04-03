@@ -18,7 +18,6 @@ makedocs(
             "man/doctests.md",
             "man/hosting.md",
             "man/latex.md",
-            "man/internals.md",
             "man/contributing.md",
         ],
         "Library" => Any[
@@ -37,6 +36,7 @@ makedocs(
                 "lib/internals/generator.md",
                 "lib/internals/mdflatten.md",
                 "lib/internals/selectors.md",
+                "lib/internals/textdiff.md",
                 "lib/internals/utilities.md",
                 "lib/internals/walkers.md",
                 "lib/internals/writers.md",
@@ -45,6 +45,7 @@ makedocs(
     ],
     # Use clean URLs, unless built as a "local" build
     html_prettyurls = !("local" in ARGS),
+    html_canonical = "https://juliadocs.github.io/Documenter.jl/stable/",
 )
 
 deploydocs(

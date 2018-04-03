@@ -20,6 +20,8 @@ import .Documents:
     MetaNode
 
 using Compat
+import Compat.Markdown
+import Compat.Base64: stringmime
 
 
 function expand(doc::Documents.Document)
@@ -291,7 +293,7 @@ function Selectors.runner(::Type{DocsBlocks}, x, page, doc)
         end
 
         # Concatenate found docstrings into a single `MD` object.
-        docstr = Base.Markdown.MD(map(Documenter.DocSystem.parsedoc, docs))
+        docstr = Markdown.MD(map(Documenter.DocSystem.parsedoc, docs))
         docstr.meta[:results] = docs
 
         # Generate a unique name to be used in anchors and links for the docstring.
@@ -451,12 +453,12 @@ function Selectors.runner(::Type{ExampleBlocks}, x, page, doc)
     name = matched[1]
     sym  = isempty(name) ? gensym("ex-") : Symbol("ex-", name)
     mod  = get!(page.globals.meta, sym, Module(sym))::Module
-    # Evaluate the code block. We redirect STDOUT/STDERR to `buffer`.
+    # Evaluate the code block. We redirect stdout/stderr to `buffer`.
     result, buffer = nothing, IOBuffer()
     for (ex, str) in Utilities.parseblock(x.code, doc, page)
         (value, success, backtrace, text) = Utilities.withoutput() do
             cd(dirname(page.build)) do
-                eval(mod, :(ans = $(eval(mod, ex))))
+                eval(mod, Expr(:(=), :ans, ex))
             end
         end
         result = value
@@ -473,7 +475,7 @@ function Selectors.runner(::Type{ExampleBlocks}, x, page, doc)
     input   = droplines(x.code)
 
     # Special-case support for displaying SVG graphics. TODO: make this more general.
-    output = mimewritable(MIME"image/svg+xml"(), result) ?
+    output = showable(MIME"image/svg+xml"(), result) ?
         Documents.RawHTML(Base.invokelatest(stringmime, MIME"image/svg+xml"(), result)) :
         Markdown.Code(Documenter.DocChecks.result_to_string(buffer, result))
 
@@ -491,7 +493,7 @@ function Selectors.runner(::Type{REPLBlocks}, x, page, doc)
     matched = match(r"^@repl[ ]?(.*)$", x.language)
     matched === nothing && error("invalid '@repl' syntax: $(x.language)")
     name = matched[1]
-    sym  = isempty(name) ? gensym("repl-") : Symbol("repl-", name)
+    sym  = isempty(name) ? gensym("ex-") : Symbol("ex-", name)
     mod  = get!(page.globals.meta, sym, Module(sym))::Module
     code = split(x.code, '\n'; limit = 2)[end]
     result, out = nothing, IOBuffer()
@@ -505,7 +507,7 @@ function Selectors.runner(::Type{REPLBlocks}, x, page, doc)
         end
         result = value
         output = if success
-            hide = Base.REPL.ends_with_semicolon(input)
+            hide = Documenter.REPL.ends_with_semicolon(input)
             Documenter.DocChecks.result_to_string(buffer, hide ? nothing : value)
         else
             Documenter.DocChecks.error_to_string(buffer, value, [])
@@ -518,7 +520,7 @@ function Selectors.runner(::Type{REPLBlocks}, x, page, doc)
             println(out, output, "\n")
         end
     end
-    page.mapping[x] = Base.Markdown.Code("julia-repl", rstrip(Utilities.takebuf_str(out)))
+    page.mapping[x] = Markdown.Code("julia-repl", rstrip(String(take!(out))))
 end
 
 # @setup
@@ -560,7 +562,7 @@ end
 # Utilities.
 # ----------
 
-iscode(x::Markdown.Code, r::Regex) = ismatch(r, x.language)
+iscode(x::Markdown.Code, r::Regex) = occursin(r, x.language)
 iscode(x::Markdown.Code, lang)     = x.language == lang
 iscode(x, lang)                    = false
 
@@ -569,7 +571,7 @@ const NAMEDHEADER_REGEX = r"^@id (.+)$"
 function namedheader(h::Markdown.Header)
     if isa(h.text, Vector) && length(h.text) === 1 && isa(h.text[1], Markdown.Link)
         url = h.text[1].url
-        ismatch(NAMEDHEADER_REGEX, url)
+        occursin(NAMEDHEADER_REGEX, url)
     else
         false
     end
@@ -579,10 +581,10 @@ end
 function droplines(code; skip = 0)
     buffer = IOBuffer()
     for line in split(code, '\n')[(skip + 1):end]
-        ismatch(r"^(.*)# hide$", line) && continue
+        occursin(r"^(.*)#\s*hide$", line) && continue
         println(buffer, rstrip(line))
     end
-    strip(Utilities.takebuf_str(buffer), '\n')
+    strip(String(take!(buffer)), '\n')
 end
 
 function prepend_prompt(input)
@@ -593,7 +595,7 @@ function prepend_prompt(input)
         line = rstrip(line)
         println(out, n == 1 ? prompt : padding, line)
     end
-    rstrip(Utilities.takebuf_str(out))
+    rstrip(String(take!(out)))
 end
 
 end
